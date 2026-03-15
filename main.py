@@ -1,4 +1,4 @@
-# Pico 2
+# Flexible Pico 
 
 import uctypes, time, array, sys, select
 from machine import mem32,mem16, mem8, ADC, Pin, I2C
@@ -473,6 +473,7 @@ def main():
             maxv = 0
             pmax = 0
             pavg = 0
+            median = 0
             #p2pminmax = 0
        
             asn = time.ticks_us()
@@ -488,6 +489,7 @@ def main():
                 #tm = viper_lp_filter(adc_buffer,ADC_SAMPLES-2000)
                 
                 tm = lp_filter(adc_buffer,ADC_SAMPLES-2000)
+                median += sum(adc_buffer) / len(adc_buffer)
                 #tm = viper_lp_filter(adc_buffer,ADC_SAMPLES-2000)
                 #minmax = viper_buffer_minmax(adc_buffer[500:4500],ADC_SAMPLES-1000)
                 #print(tm,minmax)
@@ -500,6 +502,7 @@ def main():
                 ##pmax += vp2p[0]
                 ##pavg += vp2p[1] / vp2p[2]
             P2P = (maxv - minv) >> 2
+            median = int(median) >> 2
             ##VP2PMAX = pmax >> 3
             ##VP2PAVG = int(pavg) >> 3
             
@@ -510,7 +513,7 @@ def main():
         
             ase = time.ticks_us()    
         
-            print((ase-asn)/1000000,',',deviation,',',P2P,',', 0,',')
+            print((ase-asn)/1000000,',',deviation,',',P2P,',', median,',')
             ##print((ase-asn)/1000000,',',deviation,',', VP2PMAX,',', vp2p[2],',')
             update_display(deviation)
         elif print_buffer:
