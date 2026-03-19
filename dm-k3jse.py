@@ -5,18 +5,9 @@ from machine import mem32,mem16, mem8, ADC, Pin, I2C
 
 from os import uname
 
-#import framebuf
 #from ssd1306 import SSD1306_I2C
 from sh1106 import SH1106_I2C
 
-
-import onewire
-#import rp2, select
-#import serial
-#ser = serial.Serial("/dev/ttyACM1")
-#print(ser.name)
-
-#from rp2350regs import *
 
 cpu_type = uname().machine.split(' ')[-1]
 if cpu_type == 'RP2350':
@@ -32,20 +23,19 @@ elif cpu_type == 'RP2040':
 # The variable have_oled is set to false if there is no display present and the
 # display routines will not attempt to update (a non-existant display)
 #
-pix_res_x = 128  # SSD1306 horizontal resolution
-pix_res_y = 64   # SSD1306 vertical resolution
+pix_res_x = 128  # oled display horizontal resolution
+pix_res_y = 64   # oled display vertical resolution
 
 i2c_dev = I2C(0,scl=Pin(21),sda=Pin(20),freq=400000)  # start I2C on I2C1 (GPIO 26/27)
 i2c_addr = [hex(ii) for ii in i2c_dev.scan()]         # get I2C address in hex format
 if i2c_addr==[]:
     print('No I2C Display Found') 
     have_oled = False
-    #sys.exit() # exit routine if no dev found
 else:
     print("I2C Address      : {}".format(i2c_addr[0])) # I2C device address
     print("I2C Configuration: {}".format(i2c_dev))     # print I2C params
     #oled = SSD1306_I2C(pix_res_x, pix_res_y, i2c_dev)  # oled controller
-    oled = SH1106_I2C(pix_res_x, pix_res_y, i2c_dev)  # oled controller
+    oled = SH1106_I2C(pix_res_x, pix_res_y, i2c_dev)   # oled controller
     oled.flip()
     have_oled = True
 
