@@ -1,79 +1,65 @@
-# Flexible Pico 
-
 import uctypes, time, array, sys, select
 from machine import mem32,mem16, mem8, ADC, Pin, I2C
 
 from os import uname
 
-#import framebuf
 #from ssd1306 import SSD1306_I2C
 from sh1106 import SH1106_I2C
+from avg import avg
+import _thread
 
 
-import onewire
-#import rp2, select
-#import serial
-#ser = serial.Serial("/dev/ttyACM1")
-#print(ser.name)
-
-#from rp2350regs import *
+DEBUG = False           # print debug and timing information
 
 cpu_type = uname().machine.split(' ')[-1]
-if cpu_type == 'RP2350':
-    from rp2350regs import *
-    from avg import avg
-elif cpu_type == 'RP2040':
-    from rp2040regs import *
-    from avg_pico import avg
 
-###############################################################################
-# Initialize the SSD1306 OLED display if present.
-#
-# The variable have_oled is set to false if there is no display present and the
-# display routines will not attempt to update (a non-existant display)
-#
-pix_res_x = 128  # SSD1306 horizontal resolution
-pix_res_y = 64   # SSD1306 vertical resolution
-
-i2c_dev = I2C(0,scl=Pin(21),sda=Pin(20),freq=400000)  # start I2C on I2C1 (GPIO 26/27)
-i2c_addr = [hex(ii) for ii in i2c_dev.scan()]         # get I2C address in hex format
-if i2c_addr==[]:
-    print('No I2C Display Found') 
-    have_oled = False
-    #sys.exit() # exit routine if no dev found
-else:
-    print("I2C Address      : {}".format(i2c_addr[0])) # I2C device address
-    print("I2C Configuration: {}".format(i2c_dev))     # print I2C params
-    #oled = SSD1306_I2C(pix_res_x, pix_res_y, i2c_dev)  # oled controller
-    oled = SH1106_I2C(pix_res_x, pix_res_y, i2c_dev)  # oled controller
-    oled.flip()
-    have_oled = True
+from rp2350regs import *
+#if cpu_type == 'RP2350':
+#    if DEBUG:
+#        print("CPU: rp2350")
+#    from rp2350regs import *
+#    from avg import avg
+#elif cpu_type == 'RP2040':
+#    from rp2040regs import *
+#    from avg_pico import avg
 
 
-#######################################################
+######################################################
 #
 # Some global stuff
 #
 #######################################################
 
-DEBUG = False           # print debug and timing information
-print_buffer = False
-deviation_run = True
 
 
 
+HALT = 0
+DUMP = 1
+METER = 2
+thread_done = True
+is_connected = False
+
+mode = METER
+
+
+
+regs = [75_000, 2_500, 1, 3, 1.45370823508448, -105.391066423455, 2047, 7, 8, 9]
+mv = []   # meter values
+
+
+have_oled = False
 
 ADC_SHIFT   = False     # Select 8 bit or 12 bit ADC DMA transfers. True = 8 bit
 ADC_PIN     = 26
-ADC_RATE    = 75_000    # ADC sample rate
-ADC_SAMPLES = 5_000    # Number of samples for DMA count
+ADC_RATE    = regs[0]    # ADC sample rate
+ADC_SAMPLES = regs[1]    # Number of samples for DMA count
 
 if ADC_SHIFT:           # Set maximum ADC count based on DMA shift
     ADC_MAX = 255
 else:
     ADC_MAX = 4095
 
-dma0 = DMA_BASE                                       # Select DMA0
+dma0 = DMA_BASE         # Select DMA0
 
 # Declare ADC buffer global to avoide allocation overhead
 if ADC_SHIFT:     # byte size buffer
@@ -82,15 +68,10 @@ else:             # ushort (two byte) buffer
     adc_buffer = array.array('H', (0 for _ in range(ADC_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
 
 
-
 adc_init = ADC(Pin(ADC_PIN))                    # initialize ADC Pin
 
 mem32[ADC_BASE+ADC_CS] = 1                      # Power on ADC
 
-#led_pin = 13  # Metro
-#led_pin = 25  # Pico
-#led = Pin(led_pin,Pin.OUT)
-#ledmask = 1<<led_pin
 
 led = Pin("LED", Pin.OUT)
 
@@ -101,12 +82,35 @@ led = Pin("LED", Pin.OUT)
 #
 #######################################################
 
+###############################################################################
+# Initialize the SSD1306 OLED display if present.
+#
+# The variable have_oled is set to false if there is no display present and the
+# display routines will not attempt to update (a non-existant display)
+#
+def init_oled(x,y) -> tuple:
+    global i2c_dev
+    pix_res_x = x  # oled display horizontal resolution
+    pix_res_y = y   # oled display vertical resolution
 
-if DEBUG:
-    print("End Globnal")
-    
-def update_display(dev,ferror): #audio,dev, freq):
+    i2c_dev = I2C(0,scl=Pin(21),sda=Pin(20),freq=400000)  # start I2C on I2C1 (GPIO 26/27)
+    i2c_addr = [hex(ii) for ii in i2c_dev.scan()]         # get I2C address in hex format
+    if i2c_addr==[]:
+        print('No I2C Display Found') 
+        return(False,False)
+    else:
+        print("I2C Address      : {}".format(i2c_addr[0])) # I2C device address
+        print("I2C Configuration: {}".format(i2c_dev))     # print I2C params
+        #oled = SSD1306_I2C(pix_res_x, pix_res_y, i2c_dev)  # oled controller
+        oled = SH1106_I2C(pix_res_x, pix_res_y, i2c_dev)   # oled controller
+        oled.flip()
+        return(oled,True)
+
+
+def update_display(oled,dev,ferror): #audio,dev, freq):
     if have_oled:
+        if DEBUG:
+            print("Updating Dislay",dev,ferror)
         s1 = '{:>4}'.format(dev)
         oled.contrast(255)
         oled.fill(0) # clear screen
@@ -121,28 +125,8 @@ def update_display(dev,ferror): #audio,dev, freq):
         oled.show() # show new text
 
 def blink_led():
-
     led.value(not led.value())
 
-    # create a python integer from a four byte memory slice at offset (pin# * 8) as each pin has a
-    # four byte status register and four byte control register.  "+4" steps over the status register
-    #if DEBUG:
-    #    d32 = mem32[GPIO_BASE+led_pin*8+4]
-    #    print('GPIO',led_pin,'ctrl register (pg 243,247:',hex(d32),bin(d32))
-    #    d32 = mem32[PAD_BASE+led_pin*8+4] 
-    #    print('GPIO',led_pin,'pad register (pg 299,300):',hex(d32),bin(d32))
-    
-        # Display gpio output enable register - bit 13 or 25 should be set
-        # "sio" is what RP2040 calls digital io
-    #    oe = mem32[SIO_BASE+led_pin*8+4] 
-    #    print('GPIO Output Enable (pg 42 and on), :',hex(oe),bin(oe))
-
-    #for _ in range(5):
-    #    mem32[SIO_BASE+GPIO_OUT_SET] = ledmask
-    #    time.sleep(1)
-    #    mem32[SIO_BASE+GPIO_OUT_CLR] = ledmask
-    #    time.sleep(1)
-    #mem32[SIO_BASE+GPIO_OUT_XOR] = ledmask
 
 def adc_read_1_dbg(adc) -> int:
     # Get one DMA sample
@@ -168,16 +152,18 @@ def adc_read_1_dbg(adc) -> int:
           )
     return cs
 
+
 #
 # Check the DMA busy flag.  If busy, return False (DMA still running) else
 # disable further ADC cycles and return True (complete)
 #
-def dma_done(adc)->Boolean:
+def dma_done(adc)-> Boolean:
     if ((mem32[dma0+DMA_CH_CTRL] & (1<<DMA_BIT_BUSY))) > 0:
         return(False)
     else:
         mem32[adc+ADC_CS] = 0                   # disable ADC when done with sample collection    
         return(True)
+
 
 #
 # Wait for the ADC / DMA cycle to complete then
@@ -193,6 +179,7 @@ def wait_for_dma(adc)->int:
     mem32[adc+ADC_CS] = 0                   # disable ADC when done with sample collection
     aen = time.ticks_us()
     return(int(aen-asn))
+
 
 #
 # Function to collect ADC sample using DMA.  The function returns immediately so the caller
@@ -234,22 +221,6 @@ def adc_read_multi(adc,rate,samples) -> int:
 
     aen = time.ticks_us()
     return(int(aen-asn))
-    
-#
-# low pass filter the collected ADC samples.  The viper decorator uses integer
-# arithmeic to [greatly] speed up operation > 10 times faster
-#
-@micropython.viper
-def viper_lp_filter( buff:ptr16, length:int)->int:
-    asn = time.ticks_us()
-    cp = (buff[0])  #& 0xfff0
-    cp1 = (buff[1])  # & 0xfff0
-    for i in range(length-1):
-        buff[i] = (cp >> 1) + (cp1 >> 1)
-        cp = cp1
-        cp1 = (buff[i+1]) # & 0xfff0
-    aen = time.ticks_us()
-    return(int(aen-asn))
 
 def lp_filter(buff,length)->int:
     data = array.array('i', (0 for _ in range(5))) # Average over 16 samples
@@ -262,112 +233,66 @@ def lp_filter(buff,length)->int:
             buff[i] = avg(data,buff[i],2)
     aen = time.ticks_us()
     return(int(aen-asn))
-#
-# Return the minimimum and maximum values from the buffer
-#
-@micropython.viper
-def viper_buffer_minmax(buff:ptr16,buff_len:int):
-    buff_ofs = 100
-    buff_len = 4900
-    maxv = 0
-    minv = 4095
-    mininx = 0
-    maxinx = 0
-    for i in range(buff_len-1):
-        tmp = buff[buff_ofs+i]
-        if tmp > maxv:
-            maxv = tmp
-            maxinx = i
-        if tmp < minv:
-            minv = tmp
-            mininx = i
-    
-    buff[mininx] = 2048
-    buff[maxinx] = 2048
-    
-    for i in range(buff_len-1):
-        tmp = buff[buff_ofs+i]
-        if tmp > maxv:
-            maxv = tmp
-        if tmp < minv:
-            minv = tmp
-  
-    return((int(minv),int(maxv)))
 
-@micropython.viper
-def viper_find_p2p(buff:ptr16,bstart:int,bend:int)->object:
-    #print("entering find p2p")
-    p2p_sum = 0
-    p2p_count = 0
-    p2p_index = 0
-    #p2p_last
-    p2p_max = 0
-    p2p_avg = 0
-    p2p_peak = 0
-    p2p_trough = 4096
-    indx = bstart
-    
-    asn = time.ticks_us()
-    
-    
-    while indx < bend:
-      p2p_peak = 0  
-      while indx < bend:
-        # look for the next peak
-        val = buff[indx]
-        if val >= p2p_peak:
-            p2p_peak = val
-            p2p_indx = indx
-            indx += 1
-        elif (p2p_peak - val) < 100:
-            indx += 1
+
+def vm(s):
+    global mode
+
+    def cmd_bye(p):
+        global mode, is_connected
+        is_connected = False
+
+    def cmd_con(p):
+        global mode, is_connected
+        is_connected = True
+
+    def cmd_dmp(p):
+        global mode
+        mode = DUMP
+
+    def cmd_hlt(p):
+        global mode
+        mode = HALT
+
+    def cmd_lsr(p):
+        global mode
+        print(regs)
+
+    def cmd_run(p):
+        global mode
+        mode = METER
+
+    def cmd_str(p):
+        global mode
+        if len(cmdstr) < 3:
+            print("Not enough parameters for register comand")
         else:
-            indx += 1
-            break
-      #print("peak:",p2p_indx,p2p_peak)
-
-      # Look for a trough
-      p2p_trough = 4096     
-      while indx < bend:
-          val = buff[indx]
-          if val <= p2p_trough:
-            p2p_trough = val
-            p2p_indx = indx
-            indx += 1
-          elif (val - p2p_trough) < 100:
-            indx += 1
-          else:
-            indx += 1
-            break
-      #print("trough:",indx,p2p_trough)
-        
-      
-      # ignore last possibly incomplete cycle
-      if indx < bend:
-          p2p = p2p_peak - p2p_trough
-          if p2p > p2p_max:
-              p2p_max = p2p
-          p2p_sum += p2p
-          p2p_count += 1
-        
-    tm = time.ticks_us() - asn
-    #print(tm, p2p_max,p2p_sum, p2p_count)
-    return(p2p_max,p2p_sum, p2p_count, tm)
-
-#
-# This is the main program function called when the application starts
-#
-
-#1.4784946236559 -129.704301075269
-regs = [75_000, 5_000, 1, 3, 1.45370823508448, 105.391066423455, 2047, 7, 8, 9]
+            try:
+                n = int(cmdstr[2])
+            except:
+                try:
+                    n = float(cmdstr[2])
+                except:
+                    n = cmdstr[2]
+            regs[int(cmdstr[1])] = n
 
 
-#    R0: sample rate
-#    R1: sample count
-#    R3  Capturte cycles
+    opcodes = {
+        ">bye":cmd_bye,
+        ">con":cmd_con,
+        ">dmp":cmd_dmp,
+        ">hlt":cmd_hlt,
+        ">lsr":cmd_lsr,
+        ">run":cmd_run,
+        ">str":cmd_str
+    }
+    cmdstr = s.split(",") 
+    if cmdstr[0] in opcodes:
+        #print("valid op")
+        opcodes[cmdstr[0]](cmdstr)
 
 def vmx(st):
-    global print_buffer, deviation_run
+    global mode
     # "virtual machine" implementing core functionality
     #print("entering vm",st)
     #print("st: ",st)
@@ -384,13 +309,12 @@ def vmx(st):
     if cmd == "":
         pass
     elif cmd == 'd':
-        deviation_run = False
-        print_buffer = True
+        mode = DUMP
+        #print_buffer = True
     elif cmd == 'x':
-        deviation_run = True
+        mode = METER
     elif cmd == 'h':
-        deviation_run = False
-        print_buffer =False
+        mode = HALT
     elif cmd == 'm':
         regs[6] =  int(sum(adc_buffer) / len(adc_buffer))
     elif cmd == "r":
@@ -422,136 +346,154 @@ def vmx(st):
         print(regs)
 
 def dump_buffer():
-    global print_buffer
+    global mode, thread_done
+    print("dump buffer")
     tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
     tm = wait_for_dma(ADC_BASE)
-    #tm = lp_filter(adc_buffer,ADC_SAMPLES)
-    tm = viper_lp_filter(adc_buffer,ADC_SAMPLES)
+    tm = lp_filter(adc_buffer,ADC_SAMPLES)
+    #tm = viper_lp_filter(adc_buffer,ADC_SAMPLES)
     #vp2p = viper_find_p2p(adc_buffer,500,4500)
     #pmax += vp2p[0]
     #pavg += vp2p[1] / vp2p[2]
     print(*adc_buffer)
-    print_buffer = False
-    #time.sleep(2)
-
-def main():
-    global print_buffer
-    #print("Hello World")
-    #print("ADC_1 Return:",hex(adc_read_1_dbg(ADC_BASE)))
-
-    # Create a polling object instance
-    poll_obj = select.poll()
-
-    # Register sys.stdin (standard input) for monitoring read events with priority 1
-    poll_obj.register(sys.stdin, select.POLLIN)
+    mode = HALT
+    thread_done = True
 
 
-#    v_ref = 3.3
-#    dev_scale = 1525 # Andy's scanner
-#    dev_scale = 2225 # WA3NOA Bearcat BC125AT scanner
+def run_meter(cycles=4):
+    global regs,thread_done, mv, mode
+    median = 0
+    minv = 0
+    maxv = 0
 
-    cmd_text = ''
-    cmd1 = ''
-    
-    ##print_buffer = False
+    asn = time.ticks_us()
+    for i in range(cycles):
+        #print("loop")
+        tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
+        tm = wait_for_dma(ADC_BASE)
+                        
+        tm = lp_filter(adc_buffer,ADC_SAMPLES)
+        median += sum(adc_buffer) / len(adc_buffer)
+        minv += min(adc_buffer[100:ADC_SAMPLES])
+        maxv += max(adc_buffer[100:ADC_SAMPLES])
+        #maxv += max(adc_buffer[100:ADC_SAMPLES-1000])        
+
+    ase = time.ticks_us()    
+    P2P = (maxv - minv) >> 2
+    median = int(median) >> 2
+    deviation = int((P2P) * regs[4] + regs[5]) 
+        
+    #ase = time.ticks_us()    
+            
+    ferror = int((median - regs[6]) *5000/1755)
+    #print((ase-asn)/1000000,',',deviation,',',P2P,',', regs[6], ',', median,',',ferror,',')
+    mv = [(ase-asn)/1000000,deviation,P2P,regs[6],median,ferror,' ']
+
+    update_display(oled,deviation,ferror)
+    if is_connected:
+        print("<",mv[0],mv[1],mv[2],mv[3],mv[4],mv[5],">")
+    thread_done = True
+
+def cntrl_loop():
+    global oled, have_oled, thread_done, is_connected
+
+    text_buff = ""
+     # Create a polling object instance
+
+    #poll_obj = select.poll()
+
+   # Register sys.stdin (standard input) for monitoring read events with priority 1
+    #poll_obj.register(sys.stdin, select.POLLIN)
 
     while True:
-      try:
-        blink_led()
-    
-        if ps := poll_obj.poll(10):    # wait 10 milliseconds
+        #print("ADC_1 Return:",hex(adc_read_1_dbg(ADC_BASE)))
+        #time.sleep(2)
+        if ps := poll_obj.poll(0):    # wait 10 milliseconds
             try:
+                print("got chr")
                 for (o, e) in ps:
                     if o == sys.stdin and e == select.POLLIN:
                         #st = sys.stdin.readline().strip().lower().split(",")
                         ch = sys.stdin.read(1)
-                        cmd_text += ch
+                        text_buff += ch
                         #print('cmd_text:',cmd_text)
                         #print(cmd_text)
-                        if ch == '\n':
-                            #cmd1 = str(cmd_text.strip().lower().split(','))
-                            cmd1 = str(cmd_text.strip().lower())
-                            #print("cmd:",cmd1)
-                            cmd_text = ''
-                            vmx(cmd1)
-                            cmd1 = ''
+                    if ch == '\n':
+                        #cmd1 = str(cmd_text.strip().lower().split(','))
+                        cmd1 = str(text_buff.strip().lower())
+                        #print("cmd:",cmd1)
+                        text_buff = ''
+                        #vmx(cmd1)
+                        vm(cmd1)
+                        #print("vm mode",mode)
             except:
                 pass
-        
-        #if cmd1 != '':
-        #    vmx(cmd1)
-        #    cmd1 = ''
+        #time.sleep(1)
+
+
+def main():
+    global oled, have_oled, thread_done, is_connected, mode
+
+    poll_obj = select.poll()
+
+   # Register sys.stdin (standard input) for monitoring read events with priority 1
+    poll_obj.register(sys.stdin, select.POLLIN)
  
-        if deviation_run:
-            minv = 0
-            maxv = 0
-            pmax = 0
-            pavg = 0
-            median = 0
-            
-            #p2pminmax = 0
-       
-            asn = time.ticks_us()
-            for i in range(4):
-                #print("loop")
-                tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
-                tm = wait_for_dma(ADC_BASE)
-                ##tm = viper_lp_filter(adc_buffer,ADC_SAMPLES)
-                
-                ##minv = min(adc_buffer[100:4900])
-                ##maxv = max(adc_buffer[100:4900])
-                ##print("before:",tm,minv,maxv,maxv-minv)
-                #tm = viper_lp_filter(adc_buffer,ADC_SAMPLES-2000)
-                
-                tm = lp_filter(adc_buffer,ADC_SAMPLES-2000)
-                median += sum(adc_buffer) / len(adc_buffer)
-                #tm = viper_lp_filter(adc_buffer,ADC_SAMPLES-2000)
-                #minmax = viper_buffer_minmax(adc_buffer[500:4500],ADC_SAMPLES-1000)
-                #print(tm,minmax)
-                #minv += minmax[0]
-                #maxv += minmax[1]
-                minv += min(adc_buffer[100:ADC_SAMPLES-2000])
-                maxv += max(adc_buffer[100:ADC_SAMPLES-2000])
-                ##print("after:",tm,minv,maxv,maxv-minv)
-                ##vp2p = viper_find_p2p(adc_buffer,500,4500)
-                ##pmax += vp2p[0]
-                ##pavg += vp2p[1] / vp2p[2]
-            P2P = (maxv - minv) >> 2
-            median = int(median) >> 2
-            ##VP2PMAX = pmax >> 3
-            ##VP2PAVG = int(pavg) >> 3
-            
-            ##deviation = int((P2P- 359) * 2.53950338600452 + 750)
-            #deviation = int((P2P) * 2.57994917026621 -190.543650755598)  # Non-inverting
-            #deviation = int((P2P) * 1.4784946236559 -129.704301075269)  # inverting
-            deviation = int((P2P) * regs[4] -regs[5])  # inverting
-        
-            ase = time.ticks_us()    
-            
-            ferror = int((median - regs[6]) *5000/1755)
-            print((ase-asn)/1000000,',',deviation,',',P2P,',', regs[6], ',', median,',',ferror,',')
-            
-            ##print((ase-asn)/1000000,',',deviation,',', VP2PMAX,',', vp2p[2],',')
-            update_display(deviation,ferror)
-        elif print_buffer:
-            dump_buffer()
+    text_buff = ""
 
+    (oled, have_oled) = init_oled(128,64)
+    update_display(oled,100,200)
+    is_connected = True
+    #cntrl_loop()
 
-        #print((ase-asn)/1000000,',',deviation,',',VP2PMAX)
-        #sys.exit()
-        #print((ase-asn)/1000000,P2P)
-#    
-#        devn = round(int(P2P*v_ref/4096*dev_scale+5),-1)
-#        
-#        print(minmax[0],",",minmax[1],",",P2P,",",devn,',')
-#        #blink_led()
-#        update_display(devn)
+    while True:
+        try:
+            #print("ADC_1 Return:",hex(adc_read_1_dbg(ADC_BASE)))
+            #time.sleep(2)
+            if ps := poll_obj.poll(0):    # wait 10 milliseconds
+                try:
+                    #print("got chr")
+                    for (o, e) in ps:
+                        if o == sys.stdin and e == select.POLLIN:
+                            #st = sys.stdin.readline().strip().lower().split(",")
+                            ch = sys.stdin.read(1)
+                            text_buff += ch
+                            #print('cmd_text:',cmd_text)
+                            #print(cmd_text)
+                        if ch == '\n':
+                            #cmd1 = str(cmd_text.strip().lower().split(','))
+                            cmd1 = str(text_buff.strip().lower())
+                            #print("cmd:",cmd1)
+                            text_buff = ''
+                            #vmx(cmd1)
+                            vm(cmd1)
+                            #print("vm mode",mode)
+                except:
+                    pass
 
-      except KeyboardInterrupt as e:
-        print('caught <ctrl>-c .... exiting',e)
-        sys.exit()
+            if (mode == METER and thread_done):
+                #print("meter")
+                thread_done = False
+                #second_thread = _thread.start_new_thread(run_meter, ())
+                #second_thread = _thread.start_new_thread(run_meter, ())
+                run_meter()
+            elif (mode == DUMP and thread_done):
+                #print("dump")
+                thread_done = False
+                #second_thread = _thread.start_new_thread(dump_buffer, ())
+                second_thread = _thread.start_new_thread(dump_buffer, ())
+            
+            #while not meter_done:
+            #    pass
+            #cycle_complete = False
+            #print(eter_vals)
+            
 
+        except KeyboardInterrupt as e:
+            print('caught <ctrl>-c .... exiting',e)
+            sys.exit()
+    
+    # never reach here
 
 if __name__ == '__main__': 
     main()
-
