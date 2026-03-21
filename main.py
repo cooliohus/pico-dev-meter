@@ -38,12 +38,18 @@ DUMP = 1
 METER = 2
 thread_done = True
 is_connected = False
+update_ready = False
 
 mode = METER
 
+# Register sys.stdin (standard input) for monitoring read events with priority 1
+poll_obj = select.poll()
+poll_obj.register(sys.stdin, select.POLLIN)
 
+# buffer to assemble incoming keys from the USB port
+serial_buff = ""
 
-regs = [75_000, 2_500, 1, 3, 1.45370823508448, -105.391066423455, 2047, 7, 8, 9]
+regs = [75_000, 2_500, 1, 2047, 1.45370823508448, -105.391066423455, 6, 7, 8, 9]
 mv = []   # meter values
 
 
@@ -258,6 +264,10 @@ def vm(s):
         global mode
         print(regs)
 
+    def cmd_stm(p):
+        global regs
+        regs[3] =  int(sum(adc_buffer) / len(adc_buffer))
+
     def cmd_run(p):
         global mode
         mode = METER
@@ -284,6 +294,7 @@ def vm(s):
         ">hlt":cmd_hlt,
         ">lsr":cmd_lsr,
         ">run":cmd_run,
+        ">stm":cmd_stm,
         ">str":cmd_str
     }
     cmdstr = s.split(",") 
@@ -316,7 +327,7 @@ def vmx(st):
     elif cmd == 'h':
         mode = HALT
     elif cmd == 'm':
-        regs[6] =  int(sum(adc_buffer) / len(adc_buffer))
+        regs[3] =  int(sum(adc_buffer) / len(adc_buffer))
     elif cmd == "r":
        # Set new register value
                     #   st[1] is register to update
@@ -361,127 +372,98 @@ def dump_buffer():
 
 
 def run_meter(cycles=4):
-    global regs,thread_done, mv, mode
-    median = 0
-    minv = 0
-    maxv = 0
-
-    asn = time.ticks_us()
-    for i in range(cycles):
-        #print("loop")
-        tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
-        tm = wait_for_dma(ADC_BASE)
-                        
-        tm = lp_filter(adc_buffer,ADC_SAMPLES)
-        median += sum(adc_buffer) / len(adc_buffer)
-        minv += min(adc_buffer[100:ADC_SAMPLES])
-        maxv += max(adc_buffer[100:ADC_SAMPLES])
-        #maxv += max(adc_buffer[100:ADC_SAMPLES-1000])        
-
-    ase = time.ticks_us()    
-    P2P = (maxv - minv) >> 2
-    median = int(median) >> 2
-    deviation = int((P2P) * regs[4] + regs[5]) 
+    global regs,thread_done, mv, mode, update_ready
+    
+    while mode == METER:
+        median = 0
+        minv = 0
+        maxv = 0
         
-    #ase = time.ticks_us()    
+        for i in range(cycles):
+            #print("loop")
             
-    ferror = int((median - regs[6]) *5000/1755)
-    #print((ase-asn)/1000000,',',deviation,',',P2P,',', regs[6], ',', median,',',ferror,',')
-    mv = [(ase-asn)/1000000,deviation,P2P,regs[6],median,ferror,' ']
+            tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
+            tm = wait_for_dma(ADC_BASE)
+            tm = lp_filter(adc_buffer,ADC_SAMPLES)
+            asn = time.ticks_us()
+            median += sum(adc_buffer) / len(adc_buffer)
+            minv += min(adc_buffer[20:ADC_SAMPLES])
+            maxv += max(adc_buffer[20:ADC_SAMPLES])
+            ase = time.ticks_us()
+            #maxv += max(adc_buffer[100:ADC_SAMPLES-1000])        
 
-    update_display(oled,deviation,ferror)
-    if is_connected:
-        print("<",mv[0],mv[1],mv[2],mv[3],mv[4],mv[5],">")
+        
+        P2P = (maxv - minv) >> 2
+        median = int(median) >> 2
+        deviation = int((P2P) * regs[4] + regs[5]) 
+            
+        #ase = time.ticks_us()    
+                
+        ferror = int((median - regs[3]) *5000/1755)
+        mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,' ']
+
+        update_ready = True
+        #update_display(oled,deviation,ferror)
+        if is_connected:
+            print("<",mv[0],mv[1],mv[2],mv[3],mv[4],mv[5],">")
+    
     thread_done = True
 
-def cntrl_loop():
-    global oled, have_oled, thread_done, is_connected
 
-    text_buff = ""
-     # Create a polling object instance
-
-    #poll_obj = select.poll()
-
-   # Register sys.stdin (standard input) for monitoring read events with priority 1
-    #poll_obj.register(sys.stdin, select.POLLIN)
-
-    while True:
-        #print("ADC_1 Return:",hex(adc_read_1_dbg(ADC_BASE)))
-        #time.sleep(2)
-        if ps := poll_obj.poll(0):    # wait 10 milliseconds
-            try:
-                print("got chr")
-                for (o, e) in ps:
-                    if o == sys.stdin and e == select.POLLIN:
-                        #st = sys.stdin.readline().strip().lower().split(",")
-                        ch = sys.stdin.read(1)
-                        text_buff += ch
-                        #print('cmd_text:',cmd_text)
-                        #print(cmd_text)
-                    if ch == '\n':
-                        #cmd1 = str(cmd_text.strip().lower().split(','))
-                        cmd1 = str(text_buff.strip().lower())
-                        #print("cmd:",cmd1)
-                        text_buff = ''
-                        #vmx(cmd1)
-                        vm(cmd1)
-                        #print("vm mode",mode)
-            except:
-                pass
-        #time.sleep(1)
+def get_chr():
+    global serial_buff, poll_obj
+    if ps := poll_obj.poll(500):    # wait 10 milliseconds
+        try:
+            #print("got chr")
+            for (o, e) in ps:
+                if o == sys.stdin and e == select.POLLIN:
+                    #st = sys.stdin.readline().strip().lower().split(",")
+                    ch = sys.stdin.read(1)
+                    #print(ord(ch))
+                    serial_buff += ch
+                    #print('cmd_text:',cmd_text)
+                    #print(cmd_text)
+                if ch == '\n':
+                    #cmd1 = str(cmd_text.strip().lower().split(','))
+                    cmd1 = str(serial_buff.strip().lower())
+                    print("cmd:",cmd1)
+                    serial_buff = ''
+                    #vmx(cmd1)
+                    vm(cmd1)
+                    #print("vm mode",mode)
+        except:
+            pass
 
 
 def main():
-    global oled, have_oled, thread_done, is_connected, mode
-
-    poll_obj = select.poll()
-
-   # Register sys.stdin (standard input) for monitoring read events with priority 1
-    poll_obj.register(sys.stdin, select.POLLIN)
- 
-    text_buff = ""
-
+    global oled, have_oled, thread_done, is_connected, mode, update_ready, poll_obj
+    
+    #print("ADC_1 Return:",hex(adc_read_1_dbg(ADC_BASE) 
     (oled, have_oled) = init_oled(128,64)
     update_display(oled,100,200)
     is_connected = True
-    #cntrl_loop()
 
     while True:
         try:
-            #print("ADC_1 Return:",hex(adc_read_1_dbg(ADC_BASE)))
-            #time.sleep(2)
-            if ps := poll_obj.poll(0):    # wait 10 milliseconds
-                try:
-                    #print("got chr")
-                    for (o, e) in ps:
-                        if o == sys.stdin and e == select.POLLIN:
-                            #st = sys.stdin.readline().strip().lower().split(",")
-                            ch = sys.stdin.read(1)
-                            text_buff += ch
-                            #print('cmd_text:',cmd_text)
-                            #print(cmd_text)
-                        if ch == '\n':
-                            #cmd1 = str(cmd_text.strip().lower().split(','))
-                            cmd1 = str(text_buff.strip().lower())
-                            #print("cmd:",cmd1)
-                            text_buff = ''
-                            #vmx(cmd1)
-                            vm(cmd1)
-                            #print("vm mode",mode)
-                except:
-                    pass
+            get_chr()
 
             if (mode == METER and thread_done):
                 #print("meter")
                 thread_done = False
                 #second_thread = _thread.start_new_thread(run_meter, ())
-                #second_thread = _thread.start_new_thread(run_meter, ())
-                run_meter()
+                second_thread = _thread.start_new_thread(run_meter, ())
+                #run_meter()
             elif (mode == DUMP and thread_done):
                 #print("dump")
                 thread_done = False
                 #second_thread = _thread.start_new_thread(dump_buffer, ())
                 second_thread = _thread.start_new_thread(dump_buffer, ())
+
+            if update_ready:
+                update_display(oled,mv[1],mv[5])
+                update_ready = False
+                #if is_connected:
+                #    print("<",mv[0],mv[1],mv[2],mv[3],mv[4],mv[5],">")
             
             #while not meter_done:
             #    pass
