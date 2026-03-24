@@ -42,6 +42,9 @@ update_ready = False
 
 mode = METER
 
+result_buffer = array.array('i', (0 for _ in range(3+3)))
+result_buffer[0] = len(result_buffer)
+
 # Register sys.stdin (standard input) for monitoring read events with priority 1
 poll_obj = select.poll()
 poll_obj.register(sys.stdin, select.POLLIN)
@@ -49,7 +52,10 @@ poll_obj.register(sys.stdin, select.POLLIN)
 # buffer to assemble incoming keys from the USB port
 serial_buff = ""
 
-regs = [75_000, 2_500, 1, 2047, 1.45370823508448, -105.391066423455, 6, 7, 8, 9]
+# 750-4000
+regs = [150_000, 3500, 1, 2047, 1.46982162160107, -116.49969366293, 6, 7, 8, 9]
+#regs = [75_000, 2_500, 1, 2047, 1.47058823529412, -125, 6, 7, 8, 9]
+
 mv = []   # meter values
 
 
@@ -133,6 +139,15 @@ def update_display(oled,dev,ferror): #audio,dev, freq):
 def blink_led():
     led.value(not led.value())
 
+def save_regs(p):
+    import json
+    with open('regs.json', 'w') as f:
+        json.dump(regs, f)
+
+def load_regs(p):
+    import json
+    with open('regs.json', 'r') as f:
+        regs = json.load(f)
 
 def adc_read_1_dbg(adc) -> int:
     # Get one DMA sample
@@ -229,17 +244,23 @@ def adc_read_multi(adc,rate,samples) -> int:
     return(int(aen-asn))
 
 def lp_filter(buff,length)->int:
-    data = array.array('i', (0 for _ in range(5))) # Average over 16 samples
+    data = array.array('i', (0 for _ in range(7))) # Average over n-3 samples
     data[0] = len(data)
     asn = time.ticks_us()
     for i in range(length):
-        if cpu_type == 'RP2350':
-            buff[i] = avg(data,buff[i])
-        else:
-            buff[i] = avg(data,buff[i],2)
+    #    if cpu_type == 'RP2350':
+        buff[i] = avg(data,buff[i])
+    #    else:
+    #        buff[i] = avg(data,buff[i],2)
     aen = time.ticks_us()
     return(int(aen-asn))
 
+def result_filter(newval) -> int:
+    global result_buffer
+    if cpu_type == 'RP2350':
+        return(avg(result_buffer, newval))
+    else:
+        return(avg(result_buffer,newval,2))
 
 def vm(s):
     global mode
@@ -255,6 +276,10 @@ def vm(s):
     def cmd_dmp(p):
         global mode
         mode = DUMP
+
+    def cmd_flp(p):
+        global oled
+        oled.flip()
 
     def cmd_hlt(p):
         global mode
@@ -291,10 +316,13 @@ def vm(s):
         ">bye":cmd_bye,
         ">con":cmd_con,
         ">dmp":cmd_dmp,
+        ">flp":cmd_flp,
         ">hlt":cmd_hlt,
         ">lsr":cmd_lsr,
+        ">rdr":load_regs,
         ">run":cmd_run,
         ">stm":cmd_stm,
+        ">wrr":save_regs,
         ">str":cmd_str
     }
     cmdstr = s.split(",") 
@@ -302,111 +330,56 @@ def vm(s):
         #print("valid op")
         opcodes[cmdstr[0]](cmdstr)
 
-def vmx(st):
-    global mode
-    # "virtual machine" implementing core functionality
-    #print("entering vm",st)
-    #print("st: ",st)
-    cmdstr = st.split(",")
-    #print("DEBUG:",cmdstr)
-    #print(cmdstr[0])
-    cmd = cmdstr[0]
-    if (cmd[0] != '>'):
-        print("cmd error, ignoring",cmdstr)
-        cmd = ""
-    else:
-        cmd = cmd[1]
-        #print("cmd:",cmd)
-    if cmd == "":
-        pass
-    elif cmd == 'd':
-        mode = DUMP
-        #print_buffer = True
-    elif cmd == 'x':
-        mode = METER
-    elif cmd == 'h':
-        mode = HALT
-    elif cmd == 'm':
-        regs[3] =  int(sum(adc_buffer) / len(adc_buffer))
-    elif cmd == "r":
-       # Set new register value
-                    #   st[1] is register to update
-                    #   st[2] is new register value
-        if len(cmdstr) < 3:
-            print("Not enough parameters for register comand")
-        else:
-            try:
-                #print("opcode:", cmdstr[0], int(cmdstr[1]), int(cmdstr[2]))
-                # if (int(st[1])!=0) and ((int(st[2]) < 500) or (int(st[2]) > 5000)):
-                #    print("Parameter out of range")
-                #    break
-                #print("Writing Registers")
-                try:
-                    n = int(cmdstr[2])
-                except:
-                    try:
-                        n = float(cmdstr[2])
-                    except:
-                        n = cmdstr[2]
-                regs[int(cmdstr[1])] = n
-            except:
-                print(">str: Parameter Error")
-    elif cmd == "l":
-        # list the values contained in all 10 virtual registers
-        #:print("list registers")
-        print(regs)
-
 def dump_buffer():
-    global mode, thread_done
-    print("dump buffer")
-    tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
-    tm = wait_for_dma(ADC_BASE)
-    tm = lp_filter(adc_buffer,ADC_SAMPLES)
-    #tm = viper_lp_filter(adc_buffer,ADC_SAMPLES)
-    #vp2p = viper_find_p2p(adc_buffer,500,4500)
-    #pmax += vp2p[0]
-    #pavg += vp2p[1] / vp2p[2]
+    global mode, thread_done, regs
+    minv = 0
+    maxv = 0
+    #print("dump buffer")
+    for i in range(4):
+        tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
+        tm = wait_for_dma(ADC_BASE)
+        tm = lp_filter(adc_buffer,ADC_SAMPLES)
+        minv += min(adc_buffer[20:ADC_SAMPLES])
+        maxv += max(adc_buffer[20:ADC_SAMPLES])
+
+    P2P =  (maxv - minv) >> 2
+
+    deviation = int((P2P) * regs[4] + regs[5]) 
+    adc_buffer[0] = deviation
     print(*adc_buffer)
     mode = HALT
     thread_done = True
 
 
-def run_meter(cycles=4):
+def run_meter(cycles=2):
     global regs,thread_done, mv, mode, update_ready
     
     while mode == METER:
         median = 0
         minv = 0
         maxv = 0
-        
+        asn = time.ticks_us()    
         for i in range(cycles):
             #print("loop")
-            
             tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
             tm = wait_for_dma(ADC_BASE)
             tm = lp_filter(adc_buffer,ADC_SAMPLES)
-            asn = time.ticks_us()
             median += sum(adc_buffer) / len(adc_buffer)
             minv += min(adc_buffer[20:ADC_SAMPLES])
             maxv += max(adc_buffer[20:ADC_SAMPLES])
-            ase = time.ticks_us()
-            #maxv += max(adc_buffer[100:ADC_SAMPLES-1000])        
-
         
-        P2P = (maxv - minv) >> 2
-        median = int(median) >> 2
-        deviation = int((P2P) * regs[4] + regs[5]) 
-            
-        #ase = time.ticks_us()    
-                
-        ferror = int((median - regs[3]) *5000/1755)
-        mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,' ']
-
+        P2P = (maxv - minv) >> 1
+        median = int(median) >> 1
+        
+        f_P2P= avg(result_buffer,P2P)
+        #print(P2P,f_P2P)
+        
+        deviation = int((f_P2P) * regs[4] + regs[5]) 
+        ferror = int((median - regs[3]) * 5000/1755)
+        ase = time.ticks_us()
+        mv = [(ase-asn)/1000000,deviation,f_P2P,regs[3],median,ferror,' ']
         update_ready = True
-        #update_display(oled,deviation,ferror)
-        if is_connected:
-            print("<",mv[0],mv[1],mv[2],mv[3],mv[4],mv[5],">")
-    
+
     thread_done = True
 
 
@@ -426,11 +399,10 @@ def get_chr():
                 if ch == '\n':
                     #cmd1 = str(cmd_text.strip().lower().split(','))
                     cmd1 = str(serial_buff.strip().lower())
-                    print("cmd:",cmd1)
+                    #print("cmd:",cmd1)
                     serial_buff = ''
                     #vmx(cmd1)
                     vm(cmd1)
-                    #print("vm mode",mode)
         except:
             pass
 
@@ -441,7 +413,7 @@ def main():
     #print("ADC_1 Return:",hex(adc_read_1_dbg(ADC_BASE) 
     (oled, have_oled) = init_oled(128,64)
     update_display(oled,100,200)
-    is_connected = True
+    is_connected = False
 
     while True:
         try:
@@ -462,8 +434,11 @@ def main():
             if update_ready:
                 update_display(oled,mv[1],mv[5])
                 update_ready = False
-                #if is_connected:
-                #    print("<",mv[0],mv[1],mv[2],mv[3],mv[4],mv[5],">")
+                if is_connected:
+                    adcval = mv[2].to_bytes(2, 'big')
+                    fadcval = avg(result_buffer,mv[2])
+                    #print(mv[2],adcval,fadcval)
+                    print("<",mv[0],mv[1],fadcval,mv[3],mv[4],mv[5],">")
             
             #while not meter_done:
             #    pass
