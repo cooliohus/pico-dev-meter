@@ -11,6 +11,8 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
+VERSION = "1.0.0 03/25/2026"
+
 cpu_type = uname().machine.split(' ')[-1]
 
 from rp2350regs import *
@@ -115,7 +117,8 @@ def init_oled(x,y) -> tuple:
         print("I2C Configuration: {}".format(i2c_dev))     # print I2C params
         #oled = SSD1306_I2C(pix_res_x, pix_res_y, i2c_dev)  # oled controller
         oled = SH1106_I2C(pix_res_x, pix_res_y, i2c_dev)   # oled controller
-        oled.flip()
+        oled.contrast(255)
+        #oled.flip()
         return(oled,True)
 
 
@@ -124,16 +127,15 @@ def update_display(oled,dev,ferror): #audio,dev, freq):
         if DEBUG:
             print("Updating Dislay",dev,ferror)
         s1 = '{:>4}'.format(dev)
-        oled.contrast(255)
         oled.fill(0) # clear screen
         oled.fill_rect(0, 0, 127, 63, 1) # build big border
         oled.fill_rect(2, 2, 124, 60, 0)
         oled.text("Deviation:",25,10)
         oled.text(" "+ s1 + " Hz.",20,25)
-        #s1 = '{:>4}'.format(ferror)
         if abs(ferror) < 6:
             ferror = 0
-        oled.text("Ferr: "+str(ferror)+" Hz",5,45)
+        s1 = '{:>4}'.format(ferror)
+        oled.text("Ferr: "+s1+" Hz",5,45)
         oled.show() # show new text
 
 def blink_led():
@@ -414,6 +416,12 @@ def main():
     (oled, have_oled) = init_oled(128,64)
     update_display(oled,100,200)
     is_connected = False
+    try:
+        load_regs(1)
+    except:
+        print("failed to load regs, using program defaults")
+        #pass
+
 
     while True:
         try:
@@ -433,6 +441,7 @@ def main():
 
             if update_ready:
                 update_display(oled,mv[1],mv[5])
+                blink_led()
                 update_ready = False
                 if is_connected:
                     adcval = mv[2].to_bytes(2, 'big')
