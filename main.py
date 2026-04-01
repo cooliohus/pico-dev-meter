@@ -33,8 +33,6 @@ from rp2350regs import *
 #######################################################
 
 
-
-
 HALT = 0
 DUMP = 1
 METER = 2
@@ -44,7 +42,7 @@ update_ready = False
 
 mode = METER
 
-result_buffer = array.array('i', (0 for _ in range(3+3)))
+result_buffer = array.array('i', (0 for _ in range(3+1)))
 result_buffer[0] = len(result_buffer)
 
 # Register sys.stdin (standard input) for monitoring read events with priority 1
@@ -337,14 +335,14 @@ def dump_buffer():
     minv = 0
     maxv = 0
     #print("dump buffer")
-    for i in range(4):
+    for i in range(2):
         tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
         tm = wait_for_dma(ADC_BASE)
-        tm = lp_filter(adc_buffer,ADC_SAMPLES)
+        #tm = lp_filter(adc_buffer,ADC_SAMPLES)
         minv += min(adc_buffer[20:ADC_SAMPLES])
         maxv += max(adc_buffer[20:ADC_SAMPLES])
 
-    P2P =  (maxv - minv) >> 2
+    P2P =  (maxv - minv) >> 1
 
     deviation = int((P2P) * regs[4] + regs[5]) 
     adc_buffer[0] = deviation
@@ -353,7 +351,7 @@ def dump_buffer():
     thread_done = True
 
 
-def run_meter(cycles=2):
+def run_meter(cycles=4):
     global regs,thread_done, mv, mode, update_ready
     
     while mode == METER:
@@ -370,8 +368,8 @@ def run_meter(cycles=2):
             minv += min(adc_buffer[20:ADC_SAMPLES])
             maxv += max(adc_buffer[20:ADC_SAMPLES])
         
-        P2P = (maxv - minv) >> 1
-        median = int(median) >> 1
+        P2P = (maxv - minv) >> 2
+        median = int(median) >> 2
         
         f_P2P= avg(result_buffer,P2P)
         #print(P2P,f_P2P)
@@ -394,16 +392,11 @@ def get_chr():
                 if o == sys.stdin and e == select.POLLIN:
                     #st = sys.stdin.readline().strip().lower().split(",")
                     ch = sys.stdin.read(1)
-                    #print(ord(ch))
                     serial_buff += ch
-                    #print('cmd_text:',cmd_text)
-                    #print(cmd_text)
                 if ch == '\n':
                     #cmd1 = str(cmd_text.strip().lower().split(','))
                     cmd1 = str(serial_buff.strip().lower())
-                    #print("cmd:",cmd1)
                     serial_buff = ''
-                    #vmx(cmd1)
                     vm(cmd1)
         except:
             pass
@@ -420,23 +413,16 @@ def main():
         load_regs(1)
     except:
         print("failed to load regs, using program defaults")
-        #pass
-
 
     while True:
         try:
             get_chr()
 
             if (mode == METER and thread_done):
-                #print("meter")
                 thread_done = False
-                #second_thread = _thread.start_new_thread(run_meter, ())
                 second_thread = _thread.start_new_thread(run_meter, ())
-                #run_meter()
             elif (mode == DUMP and thread_done):
-                #print("dump")
                 thread_done = False
-                #second_thread = _thread.start_new_thread(dump_buffer, ())
                 second_thread = _thread.start_new_thread(dump_buffer, ())
 
             if update_ready:
@@ -446,14 +432,7 @@ def main():
                 if is_connected:
                     adcval = mv[2].to_bytes(2, 'big')
                     fadcval = avg(result_buffer,mv[2])
-                    #print(mv[2],adcval,fadcval)
-                    print("<",mv[0],mv[1],fadcval,mv[3],mv[4],mv[5],">")
-            
-            #while not meter_done:
-            #    pass
-            #cycle_complete = False
-            #print(eter_vals)
-            
+                    print("<",mv[0],mv[1],fadcval,mv[3],mv[4],mv[5],">")           
 
         except KeyboardInterrupt as e:
             print('caught <ctrl>-c .... exiting',e)

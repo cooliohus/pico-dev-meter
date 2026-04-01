@@ -1,6 +1,6 @@
 LTspice 26.0.0 for Windows
 Circuit: Z:\home\acooper\local\projects\pico_dev_meter\pico_dm_final.net
-Start Time: Fri Mar 20 13:22:14 2026
+Start Time: Tue Mar 31 15:52:59 2026
 solver = Normal
 Maximum thread count: 8
 tnom = 27
@@ -10,7 +10,7 @@ Direct Newton iteration failed to find operating point.
 Starting Gmin stepping
 Gmin stepping succeeded in finding the operating point.
 
-Total elapsed time: 0.153 seconds.
+Total elapsed time: 0.203 seconds.
 
 Files loaded:
 Z:\home\acooper\local\projects\pico_dev_meter\pico_dm_final.net
