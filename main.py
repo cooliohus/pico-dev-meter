@@ -5,25 +5,25 @@ from os import uname
 
 #from ssd1306 import SSD1306_I2C
 from sh1106 import SH1106_I2C
-from avg import avg
+#from avg import avg
 import _thread
 
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.0.0 03/25/2026"
+VERSION = "1.0.2 04/02/2026"
 
 cpu_type = uname().machine.split(' ')[-1]
 
-from rp2350regs import *
-#if cpu_type == 'RP2350':
-#    if DEBUG:
-#        print("CPU: rp2350")
-#    from rp2350regs import *
-#    from avg import avg
-#elif cpu_type == 'RP2040':
-#    from rp2040regs import *
-#    from avg_pico import avg
+#from rp2350regs import *
+if cpu_type == 'RP2350':
+    if DEBUG:
+        print("CPU: rp2350")
+    from rp2350regs import *
+    from avg import avg
+elif cpu_type == 'RP2040':
+    from rp2040regs import *
+    from avg_pico import avg
 
 
 ######################################################
@@ -42,7 +42,7 @@ update_ready = False
 
 mode = METER
 
-result_buffer = array.array('i', (0 for _ in range(3+1)))
+result_buffer = array.array('i', (0 for _ in range(3+8)))
 result_buffer[0] = len(result_buffer)
 
 # Register sys.stdin (standard input) for monitoring read events with priority 1
@@ -53,7 +53,7 @@ poll_obj.register(sys.stdin, select.POLLIN)
 serial_buff = ""
 
 # 750-4000
-regs = [150_000, 3500, 1, 2047, 1.46982162160107, -116.49969366293, 6, 7, 8, 9]
+regs = [150_000, 3500, 1, 2047, 6.476666, -120.576897, 6, 7, 8, 9]
 #regs = [75_000, 2_500, 1, 2047, 1.47058823529412, -125, 6, 7, 8, 9]
 
 mv = []   # meter values
@@ -248,10 +248,10 @@ def lp_filter(buff,length)->int:
     data[0] = len(data)
     asn = time.ticks_us()
     for i in range(length):
-    #    if cpu_type == 'RP2350':
-        buff[i] = avg(data,buff[i])
-    #    else:
-    #        buff[i] = avg(data,buff[i],2)
+        if cpu_type == 'RP2350':
+            buff[i] = avg(data,buff[i])
+        else:
+            buff[i] = avg(data,buff[i],2)
     aen = time.ticks_us()
     return(int(aen-asn))
 
@@ -260,7 +260,7 @@ def result_filter(newval) -> int:
     if cpu_type == 'RP2350':
         return(avg(result_buffer, newval))
     else:
-        return(avg(result_buffer,newval,2))
+        return(avg(result_buffer,newval,1))
 
 def vm(s):
     global mode
@@ -335,23 +335,23 @@ def dump_buffer():
     minv = 0
     maxv = 0
     #print("dump buffer")
-    for i in range(2):
-        tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
-        tm = wait_for_dma(ADC_BASE)
-        #tm = lp_filter(adc_buffer,ADC_SAMPLES)
-        minv += min(adc_buffer[20:ADC_SAMPLES])
-        maxv += max(adc_buffer[20:ADC_SAMPLES])
+    #for i in range(1):
+    tm = adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
+    tm = wait_for_dma(ADC_BASE)
+    tm = lp_filter(adc_buffer,ADC_SAMPLES)
+    minv = min(adc_buffer[20:ADC_SAMPLES])
+    maxv = max(adc_buffer[20:ADC_SAMPLES])
 
-    P2P =  (maxv - minv) >> 1
+    P2P =  maxv - minv
 
-    deviation = int((P2P) * regs[4] + regs[5]) 
+    deviation = int((P2P * regs[4]) + regs[5]) 
     adc_buffer[0] = deviation
     print(*adc_buffer)
     mode = HALT
     thread_done = True
 
 
-def run_meter(cycles=4):
+def run_meter(cycles=8):
     global regs,thread_done, mv, mode, update_ready
     
     while mode == METER:
@@ -360,24 +360,29 @@ def run_meter(cycles=4):
         maxv = 0
         asn = time.ticks_us()    
         for i in range(cycles):
+        #for i in range(1):
             #print("loop")
             tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
             tm = wait_for_dma(ADC_BASE)
-            tm = lp_filter(adc_buffer,ADC_SAMPLES)
-            median += sum(adc_buffer) / len(adc_buffer)
-            minv += min(adc_buffer[20:ADC_SAMPLES])
-            maxv += max(adc_buffer[20:ADC_SAMPLES])
+            #tm = lp_filter(adc_buffer,ADC_SAMPLES)
+            median += int(sum(adc_buffer) / len(adc_buffer))
+            #minv += min(adc_buffer[20:ADC_SAMPLES])
+            #maxv += max(adc_buffer[20:ADC_SAMPLES])
+            minv = min(adc_buffer[20:ADC_SAMPLES])
+            maxv = max(adc_buffer[20:ADC_SAMPLES])
         
-        P2P = (maxv - minv) >> 2
-        median = int(median) >> 2
+            P2P = (maxv - minv) >> 2
+            f_P2P= avg(result_buffer,P2P,3)
+            #print(P2P,f_P2P)
         
-        f_P2P= avg(result_buffer,P2P)
-        #print(P2P,f_P2P)
-        
-        deviation = int((f_P2P) * regs[4] + regs[5]) 
-        ferror = int((median - regs[3]) * 5000/1755)
+        #P2P = int((maxv - minv) >> 4)
+        median = median >> 3
+        deviation = int((f_P2P) * regs[4] + regs[5])
+        #deviation = int(P2P * regs[4] + regs[5]) 
+        ferror = int((median - regs[3]) * 5000/1522)
         ase = time.ticks_us()
         mv = [(ase-asn)/1000000,deviation,f_P2P,regs[3],median,ferror,' ']
+        #print(mv[0],P2P,f_P2P,deviation)
         update_ready = True
 
     thread_done = True
@@ -385,7 +390,7 @@ def run_meter(cycles=4):
 
 def get_chr():
     global serial_buff, poll_obj
-    if ps := poll_obj.poll(500):    # wait 10 milliseconds
+    if ps := poll_obj.poll(10):    # wait 10 milliseconds
         try:
             #print("got chr")
             for (o, e) in ps:
@@ -430,9 +435,10 @@ def main():
                 blink_led()
                 update_ready = False
                 if is_connected:
-                    adcval = mv[2].to_bytes(2, 'big')
-                    fadcval = avg(result_buffer,mv[2])
-                    print("<",mv[0],mv[1],fadcval,mv[3],mv[4],mv[5],">")           
+                    #adcval = mv[2].to_bytes(2, 'big')
+                    adcval = mv[2]
+                    #fadcval = avg(result_buffer,mv[2],0)
+                    print("<",mv[0],mv[1],adcval,mv[3],mv[4],mv[5],">")           
 
         except KeyboardInterrupt as e:
             print('caught <ctrl>-c .... exiting',e)
