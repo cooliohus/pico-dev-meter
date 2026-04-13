@@ -1,0 +1,71 @@
+send "l"
+
+set s 3
+
+send "r,1,1000"
+gosub update
+send "r,2,500"
+gosub update
+send "r,2,1000"
+gosub update
+send "r,2,1500"
+gosub update
+send "r,2,2000"
+gosub update
+send "r,2,2500"
+gosub update
+send "r,2,3000"
+gosub update
+send "r,2,3500"
+gosub update
+send "r,2,4000"
+gosub update
+send "r,2,4500"
+gosub update
+send "r,2,5000"
+gosub update
+send "r,2,5500"
+gosub update
+send "r,2,6000"
+gosub update
+
+send "r,2,2000"
+gosub update
+
+send "r,0,19602500"
+gosub update
+send "r,0,19597500"
+gosub update
+send "r,0,19600000"
+gosub update
+
+print "Done...."
+exit
+
+
+update:
+  expect "Registers"
+  print
+  send "u"
+  expect "settings"
+  print "\n"
+  sleep s
+  return
+
+update1:
+  expect "Registers"
+  print
+  send "h"
+  expect "SM0"
+  print
+  send "u"
+  expect "settings"
+  print
+  send "s"
+  expect "SM0"
+  print "\n"
+  sleep s
+  return
+
+
+

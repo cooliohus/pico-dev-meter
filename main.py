@@ -36,6 +36,7 @@ elif cpu_type == 'RP2040':
 HALT = 0
 DUMP = 1
 METER = 2
+AVERAGE = 3
 thread_done = True
 is_connected = False
 update_ready = False
@@ -53,7 +54,7 @@ poll_obj.register(sys.stdin, select.POLLIN)
 serial_buff = ""
 
 # 750-4000
-regs = [150_000, 3500, 1, 2047, 6.476666, -120.576897, 6, 7, 8, 9]
+regs = [150_000, 3500, 1, 2047, 1.63817133, -129.239285, 6, 7, 8, 9]
 #regs = [75_000, 2_500, 1, 2047, 1.47058823529412, -125, 6, 7, 8, 9]
 
 mv = []   # meter values
@@ -86,6 +87,8 @@ mem32[ADC_BASE+ADC_CS] = 1                      # Power on ADC
 
 
 led = Pin("LED", Pin.OUT)
+pwm = Pin("GPIO23",Pin.OUT)
+pwm.value(True)
 
 
 #######################################################
@@ -265,6 +268,10 @@ def result_filter(newval) -> int:
 def vm(s):
     global mode
 
+    def cmd_avg(p):
+        global mode
+        mode = AVERAGE
+        
     def cmd_bye(p):
         global mode, is_connected
         is_connected = False
@@ -313,6 +320,7 @@ def vm(s):
 
 
     opcodes = {
+        ">avg":cmd_avg,
         ">bye":cmd_bye,
         ">con":cmd_con,
         ">dmp":cmd_dmp,
@@ -371,7 +379,7 @@ def run_meter(cycles=8):
             minv = min(adc_buffer[20:ADC_SAMPLES])
             maxv = max(adc_buffer[20:ADC_SAMPLES])
         
-            P2P = (maxv - minv) >> 2
+            P2P = (maxv - minv) #>> 1
             f_P2P= avg(result_buffer,P2P,3)
             #print(P2P,f_P2P)
         
@@ -379,7 +387,7 @@ def run_meter(cycles=8):
         median = median >> 3
         deviation = int((f_P2P) * regs[4] + regs[5])
         #deviation = int(P2P * regs[4] + regs[5]) 
-        ferror = int((median - regs[3]) * 5000/1522)
+        ferror = int((median - regs[3]) * 5000/1600)
         ase = time.ticks_us()
         mv = [(ase-asn)/1000000,deviation,f_P2P,regs[3],median,ferror,' ']
         #print(mv[0],P2P,f_P2P,deviation)
@@ -387,6 +395,35 @@ def run_meter(cycles=8):
 
     thread_done = True
 
+
+def run_meter_avg(cycles=8):
+    global regs,thread_done, mv, mode, update_ready
+    
+    while mode == AVERAGE:
+        median = 0
+        minv = 0
+        maxv = 0
+        asn = time.ticks_us()    
+        for i in range(cycles):
+        #for i in range(1):
+            #print("loop")
+            tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
+            tm = wait_for_dma(ADC_BASE)
+            #tm = lp_filter(adc_buffer,ADC_SAMPLES)
+            median += int(sum(adc_buffer) / len(adc_buffer))
+            minv += min(adc_buffer[20:ADC_SAMPLES])
+            maxv += max(adc_buffer[20:ADC_SAMPLES])
+        
+        P2P = int((maxv - minv) >> 3)
+        median = median >> 3
+        deviation = int(P2P * regs[4] + regs[5]) 
+        ferror = int((median - regs[3]) * 5000/1600)
+        ase = time.ticks_us()
+        mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,' ']
+        #mv = [(ase-asn)/1000000,deviation,P2P,regs[0],median,ferror,' ']
+        update_ready = True
+
+    thread_done = True
 
 def get_chr():
     global serial_buff, poll_obj
@@ -423,7 +460,10 @@ def main():
         try:
             get_chr()
 
-            if (mode == METER and thread_done):
+            if (mode == AVERAGE and thread_done):
+                thread_done = False
+                second_thread = _thread.start_new_thread(run_meter_avg, ())
+            elif (mode == METER and thread_done):
                 thread_done = False
                 second_thread = _thread.start_new_thread(run_meter, ())
             elif (mode == DUMP and thread_done):
