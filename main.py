@@ -15,16 +15,20 @@ VERSION = "1.0.2 04/02/2026"
 
 cpu_type = uname().machine.split(' ')[-1]
 
+result_buffer = array.array('i', (0 for _ in range(3+8)))
+result_buffer[0] = len(result_buffer)
+
 #from rp2350regs import *
 if cpu_type == 'RP2350':
     if DEBUG:
         print("CPU: rp2350")
     from rp2350regs import *
     from avg import avg
+    l_avg = lambda buff,v : avg(buff,v)
 elif cpu_type == 'RP2040':
     from rp2040regs import *
     from avg_pico import avg
-
+    l_avg = lambda buff,v : avg(buff,v,3)
 
 ######################################################
 #
@@ -43,8 +47,8 @@ update_ready = False
 
 mode = METER
 
-result_buffer = array.array('i', (0 for _ in range(3+8)))
-result_buffer[0] = len(result_buffer)
+#result_buffer = array.array('i', (0 for _ in range(3+8)))
+#result_buffer[0] = len(result_buffer)
 
 # Register sys.stdin (standard input) for monitoring read events with priority 1
 poll_obj = select.poll()
@@ -54,7 +58,10 @@ poll_obj.register(sys.stdin, select.POLLIN)
 serial_buff = ""
 
 # 750-4000
-regs = [150_000, 3500, 1, 2047, 1.63817133, -129.239285, 6, 7, 8, 9]
+if cpu_type == 'RP2350':
+    regs = [150_000, 3500, 1, 2047, 1.63817133, -129.239285, 6, 7, 8, 9]
+else:
+    regs = [150_000, 3500, 1, 2047, 1.63817133, -129.239285, 6, 7, 8, 9]
 #regs = [75_000, 2_500, 1, 2047, 1.47058823529412, -125, 6, 7, 8, 9]
 
 mv = []   # meter values
@@ -75,11 +82,11 @@ else:
 dma0 = DMA_BASE         # Select DMA0
 
 # Declare ADC buffer global to avoide allocation overhead
-if ADC_SHIFT:     # byte size buffer
-    adc_buffer = array.array('B', (0 for _ in range(ADC_SAMPLES)))   # DMA buffer for ADC, 'B' = bytes
-else:             # ushort (two byte) buffer
-    adc_buffer = array.array('H', (0 for _ in range(ADC_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
-
+#if ADC_SHIFT:     # byte size buffer
+#    adc_buffer = array.array('B', (0 for _ in range(ADC_SAMPLES)))   # DMA buffer for ADC, 'B' = bytes
+#else:             # ushort (two byte) buffer
+#    adc_buffer = array.array('H', (0 for _ in range(ADC_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
+adc_buffer = array.array('H', (0 for _ in range(ADC_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
 
 adc_init = ADC(Pin(ADC_PIN))                    # initialize ADC Pin
 
@@ -188,7 +195,6 @@ def dma_done(adc)-> Boolean:
         mem32[adc+ADC_CS] = 0                   # disable ADC when done with sample collection    
         return(True)
 
-
 #
 # Wait for the ADC / DMA cycle to complete then
 #  - disable the ADC
@@ -220,11 +226,11 @@ def adc_read_multi(adc,rate,samples) -> int:
         if DEBUG:
             print(".")
     
-    
-    if ADC_SHIFT:    # right shift result by four bits, 8 bit DMA transfer
-        fcs = (1 << FCS_BIT_THRESH) | (1 << FCS_BIT_LEVEL) | (1 << FCS_BIT_OVER) | (1 << FCS_BIT_UNDER) | (1<<FCS_BIT_DREQEN) | (1 << FCS_BIT_SHIFT) | (1<<FCS_BIT_EN)
-    else:            # 12 bit ADC result, 16 bit DMA transfer
-        fcs = (1 << FCS_BIT_THRESH) | (1 << FCS_BIT_LEVEL) | (1 << FCS_BIT_OVER) | (1 << FCS_BIT_UNDER) | (1<<FCS_BIT_DREQEN) | (1<<FCS_BIT_EN)    
+    #if ADC_SHIFT:    # right shift result by four bits, 8 bit DMA transfer
+    #    fcs = (1 << FCS_BIT_THRESH) | (1 << FCS_BIT_LEVEL) | (1 << FCS_BIT_OVER) | (1 << FCS_BIT_UNDER) | (1<<FCS_BIT_DREQEN) | (1 << FCS_BIT_SHIFT) | (1<<FCS_BIT_EN)
+    #else:            # 12 bit ADC result, 16 bit DMA transfer
+    #    fcs = (1 << FCS_BIT_THRESH) | (1 << FCS_BIT_LEVEL) | (1 << FCS_BIT_OVER) | (1 << FCS_BIT_UNDER) | (1<<FCS_BIT_DREQEN) | (1<<FCS_BIT_EN)    
+    fcs = (1 << FCS_BIT_THRESH) | (1 << FCS_BIT_LEVEL) | (1 << FCS_BIT_OVER) | (1 << FCS_BIT_UNDER) | (1<<FCS_BIT_DREQEN) | (1<<FCS_BIT_EN)    
     mem32[adc+ADC_FCS] = fcs
     mem32[adc+ADC_DIV] = (48000000 // rate - 1) << ADC_DIV_INT  # Set ADC Sample rate
        
@@ -234,10 +240,11 @@ def adc_read_multi(adc,rate,samples) -> int:
                                                                     # to run and fill fill the FIFO.  When the FIFO is full
                                                                     # the ADC willl set error indicators
     
-    if ADC_SHIFT:    # byte wide DMA transfers
-        dmactrl = (1<<DMA_BIT_INCR_WRITE) | (1<<DMA_BIT_IRQ_QUIET) | (DREQ_ADC<<DMA_BIT_TREQ_SEL) | (1<<DMA_BIT_EN)  # 8 bits
-    else:
-        dmactrl = (1<<DMA_BIT_INCR_WRITE) | (1<<DMA_BIT_IRQ_QUIET) | (1<<DMA_BIT_DATA_SIZE) | (DREQ_ADC<<DMA_BIT_TREQ_SEL) | (1<<DMA_BIT_EN)    
+    #if ADC_SHIFT:    # byte wide DMA transfers
+    #    dmactrl = (1<<DMA_BIT_INCR_WRITE) | (1<<DMA_BIT_IRQ_QUIET) | (DREQ_ADC<<DMA_BIT_TREQ_SEL) | (1<<DMA_BIT_EN)  # 8 bits
+    #else:
+     #   dmactrl = (1<<DMA_BIT_INCR_WRITE) | (1<<DMA_BIT_IRQ_QUIET) | (1<<DMA_BIT_DATA_SIZE) | (DREQ_ADC<<DMA_BIT_TREQ_SEL) | (1<<DMA_BIT_EN)    
+    dmactrl = (1<<DMA_BIT_INCR_WRITE) | (1<<DMA_BIT_IRQ_QUIET) | (1<<DMA_BIT_DATA_SIZE) | (DREQ_ADC<<DMA_BIT_TREQ_SEL) | (1<<DMA_BIT_EN)    
     mem32[dma0+DMA_CH_CTRL] = dmactrl
     
     cs = (1 << ADC_BIT_START_MANY) | 1 << ADC_BIT_EN             # Enable ADC in free run mode
@@ -246,24 +253,25 @@ def adc_read_multi(adc,rate,samples) -> int:
     aen = time.ticks_us()
     return(int(aen-asn))
 
-def lp_filter(buff,length)->int:
-    data = array.array('i', (0 for _ in range(7))) # Average over n-3 samples
-    data[0] = len(data)
-    asn = time.ticks_us()
-    for i in range(length):
-        if cpu_type == 'RP2350':
-            buff[i] = avg(data,buff[i])
-        else:
-            buff[i] = avg(data,buff[i],2)
-    aen = time.ticks_us()
-    return(int(aen-asn))
+#def lp_filter(buff,length)->int:
+#    data = array.array('i', (0 for _ in range(7))) # Average over n-3 samples
+#    data[0] = len(data)
+#    asn = time.ticks_us()
+#    for i in range(length):
+#        l_avg(data,buff[i])
+#    #    if cpu_type == 'RP2350':
+#    #        buff[i] = avg(data,buff[i])
+#    #    else:
+#    #        buff[i] = avg(data,buff[i],2)
+#    aen = time.ticks_us()
+#    return(int(aen-asn))
 
-def result_filter(newval) -> int:
-    global result_buffer
-    if cpu_type == 'RP2350':
-        return(avg(result_buffer, newval))
-    else:
-        return(avg(result_buffer,newval,1))
+#def result_filter(newval) -> int:
+#    global result_buffer
+#    if cpu_type == 'RP2350':
+#        return(avg(result_buffer, newval))
+#    else:
+#        return(avg(result_buffer,newval,1))
 
 def vm(s):
     global mode
@@ -380,7 +388,8 @@ def run_meter(cycles=8):
             maxv = max(adc_buffer[20:ADC_SAMPLES])
         
             P2P = (maxv - minv) #>> 1
-            f_P2P= avg(result_buffer,P2P,3)
+            #f_P2P= avg(result_buffer,P2P,3)
+            f_P2P= l_avg(result_buffer,P2P)
             #print(P2P,f_P2P)
         
         #P2P = int((maxv - minv) >> 4)
