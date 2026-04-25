@@ -1,0 +1,18 @@
+LTspice 26.0.0 for Windows
+Circuit: Z:\home\acooper\local\projects\pico_dev_meter\pico_dm_bc244.net
+Start Time: Sun Apr 19 20:51:24 2026
+solver = Normal
+Maximum thread count: 8
+tnom = 27
+temp = 27
+method = modified trap
+Direct Newton iteration failed to find operating point.
+Starting Gmin stepping
+Gmin stepping succeeded in finding the operating point.
+
+Total elapsed time: 0.145 seconds.
+
+Files loaded:
+Z:\home\acooper\local\projects\pico_dev_meter\pico_dm_bc244.net
+C:\users\acooper\AppData\Local\LTspice\lib\sub\LTC.lib
+

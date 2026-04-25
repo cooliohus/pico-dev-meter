@@ -11,12 +11,19 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.0.2 04/02/2026"
+VERSION = "1.0.6 04/24/2026"
 
 cpu_type = uname().machine.split(' ')[-1]
 
-result_buffer = array.array('i', (0 for _ in range(3+8)))
+C_SHIFT = 3
+C_CYCLES = 2**C_SHIFT
+C_SCALE = 1.0
+
+print("C_CYCLES:",C_CYCLES)
+
+result_buffer = array.array('i', (0 for _ in range(3+C_CYCLES)))
 result_buffer[0] = len(result_buffer)
+
 
 #from rp2350regs import *
 if cpu_type == 'RP2350':
@@ -28,7 +35,7 @@ if cpu_type == 'RP2350':
 elif cpu_type == 'RP2040':
     from rp2040regs import *
     from avg_pico import avg
-    l_avg = lambda buff,v : avg(buff,v,3)
+    l_avg = lambda buff,v : avg(buff,v,C_SHIFT)
 
 ######################################################
 #
@@ -59,9 +66,12 @@ serial_buff = ""
 
 # 750-4000
 if cpu_type == 'RP2350':
-    regs = [150_000, 3500, 1, 2047, 1.63817133, -129.239285, 6, 7, 8, 9]
+    #regs = [300_000, 5000, 1, 2050, 0.000036216158,1.859563, -41.933, 7, 8, 9]
+    # handy-andy / 1500 / BC244
+    regs = [300_000, 5000, C_SHIFT, 2047, 0.000036216158, 1.859563, -41.933, C_SCALE, 8, VERSION]
 else:
-    regs = [150_000, 3500, 1, 2047, 1.63817133, -129.239285, 6, 7, 8, 9]
+    #regs = [300_000, 5000, 1, 2047, 1.6641885, -128.4224, 6, 7, 8, 9]
+    regs = [300_000, 5000, C_SHIFT, 2047, 0.000012389634, 1.6107685, -93.211, C_SCALE, 8, VERSION]
 #regs = [75_000, 2_500, 1, 2047, 1.47058823529412, -125, 6, 7, 8, 9]
 
 mv = []   # meter values
@@ -115,7 +125,7 @@ def init_oled(x,y) -> tuple:
     pix_res_x = x  # oled display horizontal resolution
     pix_res_y = y   # oled display vertical resolution
 
-    i2c_dev = I2C(0,scl=Pin(21),sda=Pin(20),freq=400000)  # start I2C on I2C1 (GPIO 26/27)
+    i2c_dev = I2C(0,scl=Pin(21),sda=Pin(20),freq=400000)  # start I2C on I2C0 (GPIO 20/21)
     i2c_addr = [hex(ii) for ii in i2c_dev.scan()]         # get I2C address in hex format
     if i2c_addr==[]:
         print('No I2C Display Found') 
@@ -305,8 +315,9 @@ def vm(s):
         print(regs)
 
     def cmd_stm(p):
-        global regs
-        regs[3] =  int(sum(adc_buffer) / len(adc_buffer))
+        global regs, mv
+        regs[3] =  mv[4]   # assumes meter is running
+        #print("stm",regs[3])
 
     def cmd_run(p):
         global mode
@@ -326,20 +337,24 @@ def vm(s):
                     n = cmdstr[2]
             regs[int(cmdstr[1])] = n
 
+    def cmd_ver(p):
+        global regs
+        print(regs[9])
 
     opcodes = {
-        ">avg":cmd_avg,
-        ">bye":cmd_bye,
-        ">con":cmd_con,
-        ">dmp":cmd_dmp,
-        ">flp":cmd_flp,
-        ">hlt":cmd_hlt,
-        ">lsr":cmd_lsr,
-        ">rdr":load_regs,
-        ">run":cmd_run,
-        ">stm":cmd_stm,
-        ">wrr":save_regs,
-        ">str":cmd_str
+        ">avg":cmd_avg,     # run in average mode
+        ">bye":cmd_bye,     # disconnect from client
+        ">con":cmd_con,     # connect to client
+        ">dmp":cmd_dmp,     # dump one ASDC buffer to serial port then halt
+        ">flp":cmd_flp,     # flip display (only some OLEDs)
+        ">hlt":cmd_hlt,     # halt
+        ">lsr":cmd_lsr,     # list registers
+        ">rcf":load_regs,   # load registers from config file
+        ">run":cmd_run,     # run in sliding window mode
+        ">stm":cmd_stm,     # stoe median value to registers
+        ">wcf":save_regs,   # save current registers to config file
+        ">str":cmd_str,     # store value register
+        ">ver":cmd_ver      # print vsersion
     }
     cmdstr = s.split(",") 
     if cmdstr[0] in opcodes:
@@ -354,22 +369,24 @@ def dump_buffer():
     #for i in range(1):
     tm = adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
     tm = wait_for_dma(ADC_BASE)
-    tm = lp_filter(adc_buffer,ADC_SAMPLES)
+    #tm = lp_filter(adc_buffer,ADC_SAMPLES)
     minv = min(adc_buffer[20:ADC_SAMPLES])
     maxv = max(adc_buffer[20:ADC_SAMPLES])
 
     P2P =  maxv - minv
 
-    deviation = int((P2P * regs[4]) + regs[5]) 
+    #deviation = int((P2P * regs[4]) + regs[5]) 
+    deviation = int((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] )
     adc_buffer[0] = deviation
     print(*adc_buffer)
     mode = HALT
     thread_done = True
 
 
-def run_meter(cycles=8):
-    global regs,thread_done, mv, mode, update_ready
+def run_meter(cycles=C_CYCLES):
+    global regs,thread_done, mv, mode, update_ready, result_buffer
     
+    f_P2P = 0
     while mode == METER:
         median = 0
         minv = 0
@@ -393,19 +410,26 @@ def run_meter(cycles=8):
             #print(P2P,f_P2P)
         
         #P2P = int((maxv - minv) >> 4)
-        median = median >> 3
-        deviation = int((f_P2P) * regs[4] + regs[5])
+        median = median >> C_SHIFT
+        #deviation = int((f_P2P) * regs[4] + regs[5])
         #deviation = int(P2P * regs[4] + regs[5]) 
-        ferror = int((median - regs[3]) * 5000/1600)
+        f_P2P = int(f_P2P)
+        
+        deviation = int((f_P2P * f_P2P) * regs[4] + f_P2P*regs[5] + regs[6] )
+        #if cpu_type == 'RP2350':
+        #    deviation = int((f_P2P * f_P2P) * regs[4] + f_P2P*regs[5] + regs[6] )
+        #else:
+        #    deviation = int((f_P2P) * regs[4] + regs[5])
+        ferror = int((median - regs[3]) * 5000/1555)
         ase = time.ticks_us()
-        mv = [(ase-asn)/1000000,deviation,f_P2P,regs[3],median,ferror,' ']
+        mv = [(ase-asn)/1000000,deviation,f_P2P,regs[3],median,ferror,'r']
         #print(mv[0],P2P,f_P2P,deviation)
         update_ready = True
 
     thread_done = True
 
 
-def run_meter_avg(cycles=8):
+def run_meter_avg(cycles=C_CYCLES):
     global regs,thread_done, mv, mode, update_ready
     
     while mode == AVERAGE:
@@ -413,9 +437,7 @@ def run_meter_avg(cycles=8):
         minv = 0
         maxv = 0
         asn = time.ticks_us()    
-        for i in range(cycles):
-        #for i in range(1):
-            #print("loop")
+        for i in range(C_CYCLES):
             tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
             tm = wait_for_dma(ADC_BASE)
             #tm = lp_filter(adc_buffer,ADC_SAMPLES)
@@ -423,12 +445,13 @@ def run_meter_avg(cycles=8):
             minv += min(adc_buffer[20:ADC_SAMPLES])
             maxv += max(adc_buffer[20:ADC_SAMPLES])
         
-        P2P = int((maxv - minv) >> 3)
-        median = median >> 3
-        deviation = int(P2P * regs[4] + regs[5]) 
-        ferror = int((median - regs[3]) * 5000/1600)
+        P2P = int((maxv - minv) >> C_SHIFT)
+        median = median >> C_SHIFT
+        #deviation = int(P2P * regs[4] + regs[5]) 
+        deviation = int((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] )
+        ferror = int((median - regs[3]) * 5000/1555)
         ase = time.ticks_us()
-        mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,' ']
+        mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,'a']
         #mv = [(ase-asn)/1000000,deviation,P2P,regs[0],median,ferror,' ']
         update_ready = True
 
@@ -487,7 +510,7 @@ def main():
                     #adcval = mv[2].to_bytes(2, 'big')
                     adcval = mv[2]
                     #fadcval = avg(result_buffer,mv[2],0)
-                    print("<",mv[0],mv[1],adcval,mv[3],mv[4],mv[5],">")           
+                    print("<",mv[0],mv[1],adcval,mv[3],mv[4],mv[5],mv[6],">")           
 
         except KeyboardInterrupt as e:
             print('caught <ctrl>-c .... exiting',e)
