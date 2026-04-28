@@ -1,22 +1,18 @@
 import uctypes, time, array, sys, select
 from machine import mem32,mem16, mem8, ADC, Pin, I2C
-#import network
-
 from os import uname
-
-#from ssd1306 import SSD1306_I2C
-from sh1106 import SH1106_I2C
-
 import _thread
-
-from avg_pico import avg
-
-#wlan = network.WLAN(network.STA_IF)
-#wlan.deinit()
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.0.6 04/26/2026"
+VERSION = "1.0.7 04/28/2026"
+
+SSD1306 = False   # SSD1306 == False implies SH1106 for now .... tacky
+
+if SSD1306:
+    from ssd1306 import SSD1306_I2C
+else:
+    from sh1106 import SH1106_I2C
 
 cpu_type = uname().machine.split(' ')[-1]
 
@@ -35,11 +31,11 @@ if cpu_type == 'RP2350':
     if DEBUG:
         print("CPU: rp2350")
     from rp2350regs import *
-    from avg_pico2 import avg
+    from avg import avg
     l_avg = lambda buff,v : avg(buff,v)
 elif cpu_type == 'RP2040':
     from rp2040regs import *
-    from avg_pico1 import avg
+    from avg_pico import avg
     l_avg = lambda buff,v : avg(buff,v,C_SHIFT)
 
 ######################################################
@@ -69,30 +65,28 @@ poll_obj.register(sys.stdin, select.POLLIN)
 # buffer to assemble incoming keys from the USB port
 serial_buff = ""
 
-# 750-4000
 if cpu_type == 'RP2350':
     regs = [200_000, 5000, C_SHIFT, 2047, 0.00001797804, 1.603437, -83.752, C_SCALE, 8, VERSION]    # HP
 else:
     regs = [200_000, 5000, C_SHIFT, 2047, 0.00001626, 1.609244, -93.121, C_SCALE, 8, VERSION]  # HP
-    #regs = [300_000, 5000, C_SHIFT, 2047, 0.000012389634, 1.6107685, -93.211, C_SCALE, 8, VERSION]  # HA
-#regs = [75_000, 2_500, 1, 2047, 1.47058823529412, -125, 6, 7, 8, 9]
 
 mv = [0,0,0,0,2047,0,'r',0]   # meter values
 
 
-have_oled = False
 
 ADC_SHIFT   = False     # Select 8 bit or 12 bit ADC DMA transfers. True = 8 bit
-ADC_PIN     = 26
+ADC_PIN     = 26        # ADC channel 0
 ADC_RATE    = regs[0]    # ADC sample rate
 ADC_SAMPLES = regs[1]    # Number of samples for DMA count
+
+have_oled = False
 
 if ADC_SHIFT:           # Set maximum ADC count based on DMA shift
     ADC_MAX = 255
 else:
     ADC_MAX = 4095
 
-dma0 = DMA_BASE         # Select DMA0
+dma0 = DMA_BASE + 0        # Select DMA0
 
 # Declare ADC buffer global to avoide allocation overhead
 #if ADC_SHIFT:     # byte size buffer
@@ -136,28 +130,30 @@ def init_oled(x,y) -> tuple:
     else:
         print("I2C Address      : {}".format(i2c_addr[0])) # I2C device address
         print("I2C Configuration: {}".format(i2c_dev))     # print I2C params
-        #oled = SSD1306_I2C(pix_res_x, pix_res_y, i2c_dev)  # oled controller
-        oled = SH1106_I2C(pix_res_x, pix_res_y, i2c_dev)   # oled controller
+        if SSD1306:
+            oled = SSD1306_I2C(pix_res_x, pix_res_y, i2c_dev)  # oled controller
+        else:
+            oled = SH1106_I2C(pix_res_x, pix_res_y, i2c_dev)   # oled controller
         oled.contrast(255)
         #oled.flip()
         return(oled,True)
 
 
-def update_display(oled,dev,ferror): #audio,dev, freq):
+def update_display(ooled,dev,ferror): #audio,dev, freq):
     if have_oled:
         if DEBUG:
             print("Updating Dislay",dev,ferror)
         s1 = '{:>4}'.format(dev)
-        oled.fill(0) # clear screen
-        oled.fill_rect(0, 0, 127, 63, 1) # build big border
-        oled.fill_rect(2, 2, 124, 60, 0)
-        oled.text("Deviation:",25,10)
-        oled.text(" "+ s1 + " Hz.",20,25)
+        ooled.fill(0) # clear screen
+        ooled.fill_rect(0, 0, 127, 63, 1) # build big border
+        ooled.fill_rect(2, 2, 124, 60, 0)
+        ooled.text("Deviation:",25,10)
+        ooled.text(" "+ s1 + " Hz.",20,25)
         if abs(ferror) < 6:
             ferror = 0
         s1 = '{:>4}'.format(ferror)
-        oled.text("Ferr: "+s1+" Hz",5,45)
-        oled.show() # show new text
+        ooled.text("Ferr: "+s1+" Hz",5,45)
+        ooled.show() # show new text
 
 def blink_led():
     led.value(not led.value())
@@ -196,7 +192,6 @@ def adc_read_1_dbg(adc) -> int:
           )
     return cs
 
-
 #
 # Check the DMA busy flag.  If busy, return False (DMA still running) else
 # disable further ADC cycles and return True (complete)
@@ -205,7 +200,7 @@ def dma_done(adc)-> Boolean:
     if ((mem32[dma0+DMA_CH_CTRL] & (1<<DMA_BIT_BUSY))) > 0:
         return(False)
     else:
-        mem32[adc+ADC_CS] = 0                   # disable ADC when done with sample collection    
+        mem32[adc+ADC_CS] = 0   # disable ADC when done with sample collection    
         return(True)
 
 #
@@ -239,24 +234,16 @@ def adc_read_multi(adc,rate,samples) -> int:
         if DEBUG:
             print(".")
     
-    #if ADC_SHIFT:    # right shift result by four bits, 8 bit DMA transfer
-    #    fcs = (1 << FCS_BIT_THRESH) | (1 << FCS_BIT_LEVEL) | (1 << FCS_BIT_OVER) | (1 << FCS_BIT_UNDER) | (1<<FCS_BIT_DREQEN) | (1 << FCS_BIT_SHIFT) | (1<<FCS_BIT_EN)
-    #else:            # 12 bit ADC result, 16 bit DMA transfer
-    #    fcs = (1 << FCS_BIT_THRESH) | (1 << FCS_BIT_LEVEL) | (1 << FCS_BIT_OVER) | (1 << FCS_BIT_UNDER) | (1<<FCS_BIT_DREQEN) | (1<<FCS_BIT_EN)    
     fcs = (1 << FCS_BIT_THRESH) | (1 << FCS_BIT_LEVEL) | (1 << FCS_BIT_OVER) | (1 << FCS_BIT_UNDER) | (1<<FCS_BIT_DREQEN) | (1<<FCS_BIT_EN)    
     mem32[adc+ADC_FCS] = fcs
     mem32[adc+ADC_DIV] = (48000000 // rate - 1) << ADC_DIV_INT  # Set ADC Sample rate
        
     mem32[dma0+DMA_CH_READ_ADDR] = ADC_BASE+ADC_FIFO                # DMA pulls data from ADC FIFO
-    mem32[dma0+DMA_CH_WRITE_ADDR] = uctypes.addressof(adc_buffer)   # DMA writes to ada_buffer array
+    mem32[dma0+DMA_CH_WRITE_ADDR] = uctypes.addressof(adc_buffer)   # DMA writes to adc_buffer array
     mem32[dma0+DMA_CH_TRANS_COUNT] = samples                        # "samples" DMA tansfer.  Note that the ADC will continue
                                                                     # to run and fill fill the FIFO.  When the FIFO is full
                                                                     # the ADC willl set error indicators
     
-    #if ADC_SHIFT:    # byte wide DMA transfers
-    #    dmactrl = (1<<DMA_BIT_INCR_WRITE) | (1<<DMA_BIT_IRQ_QUIET) | (DREQ_ADC<<DMA_BIT_TREQ_SEL) | (1<<DMA_BIT_EN)  # 8 bits
-    #else:
-     #   dmactrl = (1<<DMA_BIT_INCR_WRITE) | (1<<DMA_BIT_IRQ_QUIET) | (1<<DMA_BIT_DATA_SIZE) | (DREQ_ADC<<DMA_BIT_TREQ_SEL) | (1<<DMA_BIT_EN)    
     dmactrl = (1<<DMA_BIT_INCR_WRITE) | (1<<DMA_BIT_IRQ_QUIET) | (1<<DMA_BIT_DATA_SIZE) | (DREQ_ADC<<DMA_BIT_TREQ_SEL) | (1<<DMA_BIT_EN)    
     mem32[dma0+DMA_CH_CTRL] = dmactrl
     
@@ -396,8 +383,6 @@ def run_meter(cycles=C_CYCLES):
         maxv = 0
         asn = time.ticks_us()    
         for i in range(cycles):
-        #for i in range(1):
-            #print("loop")
             tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
             tm = wait_for_dma(ADC_BASE)
             #tm = lp_filter(adc_buffer,ADC_SAMPLES)
@@ -422,9 +407,9 @@ def run_meter(cycles=C_CYCLES):
         median = median >> C_SHIFT
         #deviation = int((f_P2P) * regs[4] + regs[5])
         #deviation = int(P2P * regs[4] + regs[5]) 
-        f_P2P = int(f_P2P)
+        #f_P2P = int(f_P2P)
         
-        deviation = int((f_P2P * f_P2P) * regs[4] + f_P2P*regs[5] + regs[6] )
+        deviation = int(((f_P2P * f_P2P) * regs[4] + f_P2P*regs[5] + regs[6] ) * regs[7])
         #if cpu_type == 'RP2350':
         #    deviation = int((f_P2P * f_P2P) * regs[4] + f_P2P*regs[5] + regs[6] )
         #else:
@@ -465,7 +450,8 @@ def run_meter_avg(cycles=C_CYCLES):
         P2P = maxv - minv
         median = median >> C_SHIFT
         #deviation = int(P2P * regs[4] + regs[5]) 
-        deviation = int((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] )
+        #deviation = int((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] )
+        deviation = int(((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] ) * regs[7])
         ferror = int((median - regs[3]) * 5000/1555)
         ase = time.ticks_us()
         mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,'a',err]
@@ -476,7 +462,7 @@ def run_meter_avg(cycles=C_CYCLES):
 
 def get_chr():
     global serial_buff, poll_obj
-    if ps := poll_obj.poll(10):    # wait 10 milliseconds
+    if ps := poll_obj.poll(5):    # wait 5 milliseconds
         try:
             #print("got chr")
             for (o, e) in ps:
@@ -503,21 +489,22 @@ def main():
     try:
         load_regs(1)
     except:
-        print("failed to load regs, using program defaults")
+        print("No config file, using program defaults")
 
     while True:
         try:
             get_chr()
 
-            if (mode == AVERAGE and thread_done):
-                thread_done = False
-                second_thread = _thread.start_new_thread(run_meter_avg, ())
-            elif (mode == METER and thread_done):
-                thread_done = False
-                second_thread = _thread.start_new_thread(run_meter, ())
-            elif (mode == DUMP and thread_done):
-                thread_done = False
-                second_thread = _thread.start_new_thread(dump_buffer, ())
+            if thread_done:
+                if mode == AVERAGE:
+                    thread_done = False
+                    second_thread = _thread.start_new_thread(run_meter_avg, ())
+                elif mode == METER:
+                    thread_done = False
+                    second_thread = _thread.start_new_thread(run_meter, ())
+                elif mode == DUMP:
+                    thread_done = False
+                    second_thread = _thread.start_new_thread(dump_buffer, ())
 
             if update_ready:
                 update_display(oled,mv[1],mv[5])
