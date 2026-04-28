@@ -12,7 +12,7 @@ from sh1106 import SH1106_I2C
 cpu_type = uname().machine.split(' ')[-1]
 if cpu_type == 'RP2350':
     from rp2350regs import *
-    from avg import avg
+    from avg_pico2 import avg
 elif cpu_type == 'RP2040':
     from rp2040regs import *
     from avg_pico import avg

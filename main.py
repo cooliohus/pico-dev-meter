@@ -1,17 +1,21 @@
 import uctypes, time, array, sys, select
 from machine import mem32,mem16, mem8, ADC, Pin, I2C
+#import network
 
 from os import uname
 
 #from ssd1306 import SSD1306_I2C
 from sh1106 import SH1106_I2C
-#from avg import avg
+
 import _thread
 
 
+#wlan = network.WLAN(network.STA_IF)
+#wlan.deinit()
+
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.0.6 04/24/2026"
+VERSION = "1.0.6 04/26/2026"
 
 cpu_type = uname().machine.split(' ')[-1]
 
@@ -30,11 +34,11 @@ if cpu_type == 'RP2350':
     if DEBUG:
         print("CPU: rp2350")
     from rp2350regs import *
-    from avg import avg
+    from avg_pico2 import avg
     l_avg = lambda buff,v : avg(buff,v)
 elif cpu_type == 'RP2040':
     from rp2040regs import *
-    from avg_pico import avg
+    from avg_pico1 import avg
     l_avg = lambda buff,v : avg(buff,v,C_SHIFT)
 
 ######################################################
@@ -66,15 +70,13 @@ serial_buff = ""
 
 # 750-4000
 if cpu_type == 'RP2350':
-    #regs = [300_000, 5000, 1, 2050, 0.000036216158,1.859563, -41.933, 7, 8, 9]
-    # handy-andy / 1500 / BC244
-    regs = [300_000, 5000, C_SHIFT, 2047, 0.000036216158, 1.859563, -41.933, C_SCALE, 8, VERSION]
+    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001797804, 1.603437, -83.752, C_SCALE, 8, VERSION]    # HP
 else:
-    #regs = [300_000, 5000, 1, 2047, 1.6641885, -128.4224, 6, 7, 8, 9]
-    regs = [300_000, 5000, C_SHIFT, 2047, 0.000012389634, 1.6107685, -93.211, C_SCALE, 8, VERSION]
+    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001626, 1.609244, -93.121, C_SCALE, 8, VERSION]  # HP
+    #regs = [300_000, 5000, C_SHIFT, 2047, 0.000012389634, 1.6107685, -93.211, C_SCALE, 8, VERSION]  # HA
 #regs = [75_000, 2_500, 1, 2047, 1.47058823529412, -125, 6, 7, 8, 9]
 
-mv = []   # meter values
+mv = [0,0,0,0,2047,0,'r',0]   # meter values
 
 
 have_oled = False
@@ -104,8 +106,8 @@ mem32[ADC_BASE+ADC_CS] = 1                      # Power on ADC
 
 
 led = Pin("LED", Pin.OUT)
-pwm = Pin("GPIO23",Pin.OUT)
-pwm.value(True)
+#pwm = Pin("GPIO23",Pin.OUT)
+#pwm.value(True)
 
 
 #######################################################
@@ -401,9 +403,15 @@ def run_meter(cycles=C_CYCLES):
             median += int(sum(adc_buffer) / len(adc_buffer))
             #minv += min(adc_buffer[20:ADC_SAMPLES])
             #maxv += max(adc_buffer[20:ADC_SAMPLES])
-            minv = min(adc_buffer[20:ADC_SAMPLES])
-            maxv = max(adc_buffer[20:ADC_SAMPLES])
-        
+            minv = min(adc_buffer[20:ADC_SAMPLES-20])
+            maxv = max(adc_buffer[20:ADC_SAMPLES-20])
+            #print(minv,maxv)
+            if minv < 20:
+                err = 2
+            elif maxv > 4065:
+                err = 1       
+            else:
+                err = 0
             P2P = (maxv - minv) #>> 1
             #f_P2P= avg(result_buffer,P2P,3)
             f_P2P= l_avg(result_buffer,P2P)
@@ -420,9 +428,9 @@ def run_meter(cycles=C_CYCLES):
         #    deviation = int((f_P2P * f_P2P) * regs[4] + f_P2P*regs[5] + regs[6] )
         #else:
         #    deviation = int((f_P2P) * regs[4] + regs[5])
-        ferror = int((median - regs[3]) * 5000/1555)
+        ferror = int((median - regs[3]) * 5000/1550)
         ase = time.ticks_us()
-        mv = [(ase-asn)/1000000,deviation,f_P2P,regs[3],median,ferror,'r']
+        mv = [(ase-asn)/1000000,deviation,f_P2P,regs[3],median,ferror,'r',err]
         #print(mv[0],P2P,f_P2P,deviation)
         update_ready = True
 
@@ -445,13 +453,21 @@ def run_meter_avg(cycles=C_CYCLES):
             minv += min(adc_buffer[20:ADC_SAMPLES])
             maxv += max(adc_buffer[20:ADC_SAMPLES])
         
-        P2P = int((maxv - minv) >> C_SHIFT)
+        maxv = maxv >> C_SHIFT
+        minv = minv >> C_SHIFT
+        if (maxv > 4065):
+            err = 1
+        elif  (minv < 20):
+            err = 2
+        else:
+            err = 0
+        P2P = maxv - minv
         median = median >> C_SHIFT
         #deviation = int(P2P * regs[4] + regs[5]) 
         deviation = int((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] )
         ferror = int((median - regs[3]) * 5000/1555)
         ase = time.ticks_us()
-        mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,'a']
+        mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,'a',err]
         #mv = [(ase-asn)/1000000,deviation,P2P,regs[0],median,ferror,' ']
         update_ready = True
 
@@ -510,7 +526,7 @@ def main():
                     #adcval = mv[2].to_bytes(2, 'big')
                     adcval = mv[2]
                     #fadcval = avg(result_buffer,mv[2],0)
-                    print("<",mv[0],mv[1],adcval,mv[3],mv[4],mv[5],mv[6],">")           
+                    print("<",mv[0],mv[1],adcval,mv[3],mv[4],mv[5],mv[6],mv[7],">")           
 
         except KeyboardInterrupt as e:
             print('caught <ctrl>-c .... exiting',e)

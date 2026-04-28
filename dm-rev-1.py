@@ -5,7 +5,7 @@ from os import uname
 
 #from ssd1306 import SSD1306_I2C
 from sh1106 import SH1106_I2C
-from avg import avg
+from avg_pico2 import avg
 import _thread
 
 
