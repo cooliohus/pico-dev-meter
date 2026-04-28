@@ -9,6 +9,7 @@ from sh1106 import SH1106_I2C
 
 import _thread
 
+from avg_pico import avg
 
 #wlan = network.WLAN(network.STA_IF)
 #wlan.deinit()
