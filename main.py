@@ -84,14 +84,14 @@ poll_obj.register(sys.stdin, select.POLLIN)
 serial_buff = ""
 
 if cpu_type == 'RP2350':
-    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001797804, 1.603437, -83.752, C_SCALE, 8, VERSION]    # HP
+    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001797804, 1.603437, -83.752, C_SCALE, 5000/1550, VERSION]    # HP
 else:
-    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001626, 1.609244, -93.121, C_SCALE, 8, VERSION]  # HP
+    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001626, 1.609244, -93.121, C_SCALE, 5000/1550, VERSION]  # HP
 
 mv = [0,0,0,0,2047,0,'r',0]   # meter values
 
 
-
+ADC_MAX_SAMPLES = 6000
 ADC_SHIFT   = False     # Select 8 bit or 12 bit ADC DMA transfers. True = 8 bit
 ADC_PIN     = 26        # ADC channel 0
 ADC_RATE    = regs[0]    # ADC sample rate
@@ -111,7 +111,9 @@ dma0 = DMA_BASE + 0        # Select DMA0
 #    adc_buffer = array.array('B', (0 for _ in range(ADC_SAMPLES)))   # DMA buffer for ADC, 'B' = bytes
 #else:             # ushort (two byte) buffer
 #    adc_buffer = array.array('H', (0 for _ in range(ADC_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
-adc_buffer = array.array('H', (0 for _ in range(ADC_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
+
+adc_buffer = array.array('H', (0 for _ in range(ADC_MAX_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
+                                                                    # Reserve space for maximum 6000 samples
 
 adc_init = ADC(Pin(ADC_PIN))                    # initialize ADC Pin
 
@@ -399,12 +401,14 @@ def run_meter(cycles=C_CYCLES):
         median = 0
         minv = 0
         maxv = 0
+        err = 0
         asn = time.ticks_us()    
         for i in range(cycles):
             tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
             tm = wait_for_dma(ADC_BASE)
             #tm = lp_filter(adc_buffer,ADC_SAMPLES)
-            median += int(sum(adc_buffer) / len(adc_buffer))
+            #median += int(sum(adc_buffer) / len(adc_buffer))
+            median += int(  sum(adc_buffer[20:ADC_SAMPLES]) / (ADC_SAMPLES-20) )
             #minv += min(adc_buffer[20:ADC_SAMPLES])
             #maxv += max(adc_buffer[20:ADC_SAMPLES])
             minv = min(adc_buffer[20:ADC_SAMPLES-20])
@@ -414,8 +418,8 @@ def run_meter(cycles=C_CYCLES):
                 err = 2
             elif maxv > 4065:
                 err = 1       
-            else:
-                err = 0
+            #else:
+            #    err = 0
             P2P = (maxv - minv) #>> 1
             #f_P2P= avg(result_buffer,P2P,3)
             f_P2P= l_avg(result_buffer,P2P)
@@ -432,9 +436,10 @@ def run_meter(cycles=C_CYCLES):
         #    deviation = int((f_P2P * f_P2P) * regs[4] + f_P2P*regs[5] + regs[6] )
         #else:
         #    deviation = int((f_P2P) * regs[4] + regs[5])
-        ferror = int((median - regs[3]) * 5000/1550)
+        ferror = int((median - regs[3]) * regs[8])  #5000/1550)
         ase = time.ticks_us()
-        mv = [(ase-asn)/1000000,deviation,f_P2P,regs[3],median,ferror,'r',err]
+        #mv = [(ase-asn)/1000000,deviation,f_P2P,regs[3],median,ferror,'r',err]
+        mv = ['r',err,deviation,ferror,f_P2P,median,regs[3],(ase-asn)/1000000]
         #print(mv[0],P2P,f_P2P,deviation)
         update_ready = True
 
@@ -448,12 +453,13 @@ def run_meter_avg(cycles=C_CYCLES):
         median = 0
         minv = 0
         maxv = 0
+        err = 0
         asn = time.ticks_us()    
         for i in range(C_CYCLES):
             tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
             tm = wait_for_dma(ADC_BASE)
             #tm = lp_filter(adc_buffer,ADC_SAMPLES)
-            median += int(sum(adc_buffer) / len(adc_buffer))
+            median += int(  sum(adc_buffer[20:ADC_SAMPLES]) / (ADC_SAMPLES-20) )
             minv += min(adc_buffer[20:ADC_SAMPLES])
             maxv += max(adc_buffer[20:ADC_SAMPLES])
         
@@ -463,8 +469,6 @@ def run_meter_avg(cycles=C_CYCLES):
             err = 1
         elif  (minv < 20):
             err = 2
-        else:
-            err = 0
         P2P = maxv - minv
         median = median >> C_SHIFT
         #deviation = int(P2P * regs[4] + regs[5]) 
@@ -472,7 +476,8 @@ def run_meter_avg(cycles=C_CYCLES):
         deviation = int(((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] ) * regs[7])
         ferror = int((median - regs[3]) * 5000/1555)
         ase = time.ticks_us()
-        mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,'a',err]
+        #mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,'a',err]
+        mv = ['a',err,deviation,ferror,P2P,median,regs[3],(ase-asn)/1000000]
         #mv = [(ase-asn)/1000000,deviation,P2P,regs[0],median,ferror,' ']
         update_ready = True
 
