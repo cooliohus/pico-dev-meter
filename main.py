@@ -89,7 +89,7 @@ if cpu_type == 'RP2350':
 else:
     regs = [200_000, 5000, C_SHIFT, 2047, 0.00001200482, 1.630135, -102.449, C_SCALE, 5000/1550, VERSION]  # HP
 
-mv = [0,0,0,0,2047,0,'r',0]   # meter values
+mv = ['r',0,0,0,0,0,2047,0]   # meter values
 
 
 ADC_MAX_SAMPLES = 6000
