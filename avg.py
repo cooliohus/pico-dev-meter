@@ -1,3 +1,4 @@
+
 # Implementation of moving average filter in Arm Thumb assembler
 # Released under the MIT License (MIT). See LICENSE.
 # Copyright (c) 2021 Peter Hinch

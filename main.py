@@ -23,13 +23,14 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.0.7 04/28/2026"
+VERSION = "1.1.0 04/30/2026"
 
-SSD1306 = False   # SSD1306 == False implies SH1106 for now .... tacky
+#OLED_TYPE = "SSD1306"
+OLED_TYPE = "SH1106"
 
-if SSD1306:
+if OLED_TYPE == "SSD1306":
     from ssd1306 import SSD1306_I2C
-else:
+elif OLED_TYPE == "SH1106":
     from sh1106 import SH1106_I2C
 
 cpu_type = uname().machine.split(' ')[-1]
@@ -86,7 +87,7 @@ serial_buff = ""
 if cpu_type == 'RP2350':
     regs = [200_000, 5000, C_SHIFT, 2047, 0.00001797804, 1.603437, -83.752, C_SCALE, 5000/1550, VERSION]    # HP
 else:
-    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001626, 1.609244, -93.121, C_SCALE, 5000/1550, VERSION]  # HP
+    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001200482, 1.630135, -102.449, C_SCALE, 5000/1550, VERSION]  # HP
 
 mv = [0,0,0,0,2047,0,'r',0]   # meter values
 
@@ -150,25 +151,35 @@ def init_oled(x,y) -> tuple:
     else:
         print("I2C Address      : {}".format(i2c_addr[0])) # I2C device address
         print("I2C Configuration: {}".format(i2c_dev))     # print I2C params
-        if SSD1306:
+        if OLED_TYPE == "SSD1306":
             oled = SSD1306_I2C(pix_res_x, pix_res_y, i2c_dev)  # oled controller
-        else:
+        elif OLED_TYPE == "SH1106":
             oled = SH1106_I2C(pix_res_x, pix_res_y, i2c_dev)   # oled controller
+        else:
+            return(False,False)
         oled.contrast(255)
         #oled.flip()
         return(oled,True)
 
 
-def update_display(ooled,dev,ferror): #audio,dev, freq):
+def update_display(ooled,dev,ferror, err):
     if have_oled:
         if DEBUG:
             print("Updating Dislay",dev,ferror)
-        s1 = '{:>4}'.format(dev)
+        if err == 0:
+            s1 = '{:>4}'.format(dev) + " Hz."
+        elif err == 1:
+            s1 = "Overflow"
+        elif err == 2:
+            s1 = "Undeflow"
+        else:
+            s1 = "Unknown"
+
         ooled.fill(0) # clear screen
         ooled.fill_rect(0, 0, 127, 63, 1) # build big border
         ooled.fill_rect(2, 2, 124, 60, 0)
         ooled.text("Deviation:",25,10)
-        ooled.text(" "+ s1 + " Hz.",20,25)
+        ooled.text(" "+ s1 ,20,25)
         if abs(ferror) < 6:
             ferror = 0
         s1 = '{:>4}'.format(ferror)
@@ -326,7 +337,7 @@ def vm(s):
 
     def cmd_stm(p):
         global regs, mv
-        regs[3] =  mv[4]   # assumes meter is running
+        regs[3] =  mv[5]   # assumes meter is running
         #print("stm",regs[3])
 
     def cmd_run(p):
@@ -387,7 +398,9 @@ def dump_buffer():
 
     #deviation = int((P2P * regs[4]) + regs[5]) 
     deviation = int((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] )
-    adc_buffer[0] = deviation
+    adc_buffer[0] = ADC_SAMPLES
+    adc_buffer[1] = deviation
+    #print(*adc_buffer[ADC_SAMPLES-10])
     print(*adc_buffer)
     mode = HALT
     thread_done = True
@@ -507,7 +520,7 @@ def main():
     
     #print("ADC_1 Return:",hex(adc_read_1_dbg(ADC_BASE) 
     (oled, have_oled) = init_oled(128,64)
-    update_display(oled,100,200)
+    #update_display(oled,100,200)
     is_connected = False
     try:
         load_regs(1)
@@ -530,14 +543,14 @@ def main():
                     second_thread = _thread.start_new_thread(dump_buffer, ())
 
             if update_ready:
-                update_display(oled,mv[1],mv[5])
+                update_display(oled,mv[2],mv[3],mv[1])
                 blink_led()
                 update_ready = False
                 if is_connected:
                     #adcval = mv[2].to_bytes(2, 'big')
-                    adcval = mv[2]
+                    #adcval = mv[3]
                     #fadcval = avg(result_buffer,mv[2],0)
-                    print("<",mv[0],mv[1],adcval,mv[3],mv[4],mv[5],mv[6],mv[7],">")           
+                    print("<",mv[0],mv[1],mv[2],mv[3],mv[4],mv[5],mv[6],mv[7],">")           
 
         except KeyboardInterrupt as e:
             print('caught <ctrl>-c .... exiting',e)
