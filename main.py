@@ -14,7 +14,7 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-#    The author can be contacted by email at k3jse@ccoolioh.com
+#    The author can be contacted by email at k3jse@coolioh.com
 
 import uctypes, time, array, sys, select
 from machine import mem32,mem16, mem8, ADC, Pin, I2C
@@ -190,11 +190,14 @@ def blink_led():
     led.value(not led.value())
 
 def save_regs(p):
+    global regs
     import json
+    print("Store Regs")
     with open('regs.json', 'w') as f:
         json.dump(regs, f)
 
 def load_regs(p):
+    global regs
     import json
     with open('regs.json', 'r') as f:
         regs = json.load(f)

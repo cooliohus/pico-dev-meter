@@ -69,3 +69,16 @@ Store a new value to a configuration register
 
 Print the version number to the serial port
 
+## Serial port output format
+
+Data items writen to the serial port
+```
+mode: a=average, r=run
+error: 0 = no error
+deviation (Hz)
+frequency error (Hz)
+DMA buffer P2P value, ADC count
+DC value of current DMA buffer, ADC count
+ADC reference value for frequency error calculation
+Cycle time (seconds)
+```

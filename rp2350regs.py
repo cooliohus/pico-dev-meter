@@ -14,7 +14,7 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
-#    The author can be contacted by email at k3jse@ccoolioh.com#
+#    The author can be contacted by email at k3jse@coolioh.com#
 
 
 
