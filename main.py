@@ -366,15 +366,15 @@ def vm(s):
         ">avg":cmd_avg,     # run in average mode
         ">bye":cmd_bye,     # disconnect from client
         ">con":cmd_con,     # connect to client
-        ">dmp":cmd_dmp,     # dump one ASDC buffer to serial port then halt
+        ">dmp":cmd_dmp,     # dump one ADC buffer to serial port then halt
         ">flp":cmd_flp,     # flip display (only some OLEDs)
         ">hlt":cmd_hlt,     # halt
         ">lsr":cmd_lsr,     # list registers
         ">rcf":load_regs,   # load registers from config file
         ">run":cmd_run,     # run in sliding window mode
         ">stm":cmd_stm,     # stoe median value to registers
-        ">wcf":save_regs,   # save current registers to config file
-        ">str":cmd_str,     # store value register
+        ">scf":save_regs,   # save current registers to config file
+        ">str":cmd_str,     # store value to register
         ">ver":cmd_ver      # print vsersion
     }
     cmdstr = s.split(",") 
