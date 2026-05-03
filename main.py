@@ -23,10 +23,10 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.1.0 04/30/2026"
+VERSION = "1.1.1 05/01/2026"
 
-#OLED_TYPE = "SSD1306"
-OLED_TYPE = "SH1106"
+OLED_TYPE = "SSD1306"
+#OLED_TYPE = "SH1106"
 
 if OLED_TYPE == "SSD1306":
     from ssd1306 import SSD1306_I2C
@@ -44,8 +44,6 @@ print("C_CYCLES:",C_CYCLES)
 result_buffer = array.array('i', (0 for _ in range(3+C_CYCLES)))
 result_buffer[0] = len(result_buffer)
 
-
-#from rp2350regs import *
 if cpu_type == 'RP2350':
     if DEBUG:
         print("CPU: rp2350")
@@ -63,16 +61,18 @@ elif cpu_type == 'RP2040':
 #
 #######################################################
 
+# Operating modes
+HALT = 0                # Meter is idle / halted
+DUMP = 1                # Dump one DMA buffer to the serial port
+METER = 2               # Continuosly run in sliding window mode
+AVERAGE = 3             # Continuosly run in average mode
 
-HALT = 0
-DUMP = 1
-METER = 2
-AVERAGE = 3
-thread_done = True
-is_connected = False
-update_ready = False
+# State flags
+thread_done = True      # Running core-1 thread has completed
+is_connected = False    # There is an application connected, send data to serial port
+update_ready = False    # A data collection cycle has completed
 
-mode = METER
+mode = METER            # Start in METER mode
 
 #result_buffer = array.array('i', (0 for _ in range(3+8)))
 #result_buffer[0] = len(result_buffer)
@@ -84,28 +84,31 @@ poll_obj.register(sys.stdin, select.POLLIN)
 # buffer to assemble incoming keys from the USB port
 serial_buff = ""
 
+# initialize operating parameter base on cpu type (RP2040, RP2350) 
 if cpu_type == 'RP2350':
     regs = [200_000, 5000, C_SHIFT, 2047, 0.00001797804, 1.603437, -83.752, C_SCALE, 5000/1550, VERSION]    # HP
 else:
     regs = [200_000, 5000, C_SHIFT, 2047, 0.00001200482, 1.630135, -102.449, C_SCALE, 5000/1550, VERSION]  # HP
 
+# Global list for display updates
 mv = ['r',0,0,0,0,0,2047,0]   # meter values
 
 
 ADC_MAX_SAMPLES = 6000
 ADC_SHIFT   = False     # Select 8 bit or 12 bit ADC DMA transfers. True = 8 bit
 ADC_PIN     = 26        # ADC channel 0
-ADC_RATE    = regs[0]    # ADC sample rate
-ADC_SAMPLES = regs[1]    # Number of samples for DMA count
+ADC_RATE    = regs[0]   # ADC sample rate
+ADC_SAMPLES = regs[1]   # Number of samples for DMA count
 
-have_oled = False
+have_oled = False       # Flag 
 
+# remove this later as only using 12 bit ADC mode
 if ADC_SHIFT:           # Set maximum ADC count based on DMA shift
     ADC_MAX = 255
 else:
     ADC_MAX = 4095
 
-dma0 = DMA_BASE + 0        # Select DMA0
+dma0 = DMA_BASE + 0        # Select DMA channel 0
 
 # Declare ADC buffer global to avoide allocation overhead
 #if ADC_SHIFT:     # byte size buffer
@@ -116,14 +119,16 @@ dma0 = DMA_BASE + 0        # Select DMA0
 adc_buffer = array.array('H', (0 for _ in range(ADC_MAX_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
                                                                     # Reserve space for maximum 6000 samples
 
-adc_init = ADC(Pin(ADC_PIN))                    # initialize ADC Pin
+adc_init = ADC(Pin(ADC_PIN))    # initialize ADC Pin
 
-mem32[ADC_BASE+ADC_CS] = 1                      # Power on ADC
+mem32[ADC_BASE+ADC_CS] = 1      # Power on ADC
 
 
 led = Pin("LED", Pin.OUT)
-#pwm = Pin("GPIO23",Pin.OUT)
-#pwm.value(True)
+
+# Keep buck / boost regulator enabled to minimize noise
+pwm = Pin("GPIO23",Pin.OUT)
+pwm.value(True)
 
 
 #######################################################
