@@ -23,10 +23,10 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.1.1 05/01/2026"
+VERSION = "1.1.2 05/05/2026"
 
-OLED_TYPE = "SSD1306"
-#OLED_TYPE = "SH1106"
+#OLED_TYPE = "SSD1306"
+OLED_TYPE = "SH1106"
 
 if OLED_TYPE == "SSD1306":
     from ssd1306 import SSD1306_I2C
@@ -145,7 +145,7 @@ pwm.value(True)
 #
 def init_oled(x,y) -> tuple:
     global i2c_dev
-    pix_res_x = x  # oled display horizontal resolution
+    pix_res_x = x   # oled display horizontal resolution
     pix_res_y = y   # oled display vertical resolution
 
     i2c_dev = I2C(0,scl=Pin(21),sda=Pin(20),freq=400000)  # start I2C on I2C0 (GPIO 20/21)
