@@ -23,7 +23,7 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.1.2 05/05/2026"
+VERSION = "1.1.32 05/06/2026"
 
 #OLED_TYPE = "SSD1306"
 OLED_TYPE = "SH1106"
@@ -86,7 +86,7 @@ serial_buff = ""
 
 # initialize operating parameter base on cpu type (RP2040, RP2350) 
 if cpu_type == 'RP2350':
-    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001797804, 1.603437, -83.752, C_SCALE, 5000/1550, VERSION]    # HP
+    regs = [200_000, 5000, C_SHIFT, 2047, 0.000015263812, 1.614238, -99.826, C_SCALE, 5000/1550, VERSION]    # HP
 else:
     regs = [200_000, 5000, C_SHIFT, 2047, 0.00001200482, 1.630135, -102.449, C_SCALE, 5000/1550, VERSION]  # HP
 
