@@ -23,15 +23,39 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.1.32 05/06/2026"
+VERSION = "1.1.4 05/16/2026"
 
 #OLED_TYPE = "SSD1306"
-OLED_TYPE = "SH1106"
+#OLED_TYPE = "SH1106"
+OLED_TYPE = "NONE"
 
-if OLED_TYPE == "SSD1306":
-    from ssd1306 import SSD1306_I2C
-elif OLED_TYPE == "SH1106":
-    from sh1106 import SH1106_I2C
+# This is brute force for now - look for and OLED driver in file system
+# and set the display type accordingly
+import os
+try:
+    if os.stat("sh1106.py"):
+        print("found 1106 driver")
+        OLED_TYPE = "SH1106"
+        from sh1106 import SH1106_I2C
+except Exception as e:
+    #print("SSH1106 not found",e)
+    pass
+    
+try:
+    if os.stat("ssd1306.py"):
+        print("found 1306 driver")
+        OLED_TYPE = "SSD1306"
+        from ssd1306 import SSD1306_I2C
+except Exception as e:
+    #print("SSD1306 not found",e)
+    pass
+
+print("OLED Type",OLED_TYPE)
+
+#if OLED_TYPE == "SSD1306":
+#    from ssd1306 import SSD1306_I2C
+#elif OLED_TYPE == "SH1106":
+#    from sh1106 import SH1106_I2C
 
 cpu_type = uname().machine.split(' ')[-1]
 
@@ -145,6 +169,11 @@ pwm.value(True)
 #
 def init_oled(x,y) -> tuple:
     global i2c_dev
+    
+    # Added kludges to "dynamically" determine display type
+    if OLED_TYPE == "NONE":
+        return(False,False)
+    
     pix_res_x = x   # oled display horizontal resolution
     pix_res_y = y   # oled display vertical resolution
 
