@@ -17,11 +17,8 @@
 #    The author can be contacted by email at k3jse@coolioh.com
 
 import uctypes, time, array, sys, select
-from array import array
 from machine import mem32,mem16, mem8, ADC, Pin, I2C
 from os import uname
-from filt import dcf, WRAP, SCALE, REVERSE, COPY  # fir filter code
-from coeffs_200k import coeffs_200k               # fir filter high pass coefficients
 import _thread
 
 DEBUG = False           # print debug and timing information
@@ -68,7 +65,7 @@ C_SCALE = 1.0
 
 print("C_CYCLES:",C_CYCLES)
 
-result_buffer = array('i', (0 for _ in range(3+C_CYCLES)))
+result_buffer = array.array('i', (0 for _ in range(3+C_CYCLES)))
 result_buffer[0] = len(result_buffer)
 
 if cpu_type == 'RP2350':
@@ -89,11 +86,10 @@ elif cpu_type == 'RP2040':
 #######################################################
 
 # Operating modes
-HALT = const(0)                # Meter is idle / halted
-DUMP = const(1)                # Dump one DMA buffer to the serial port
-METER = const(2)               # Continuosly run in sliding window mode
-AVERAGE = const(3)             # Continuosly run in average mode
-CTCSS = const(4)               # Continuosly run in CTCSS filter mode
+HALT = 0                # Meter is idle / halted
+DUMP = 1                # Dump one DMA buffer to the serial port
+METER = 2               # Continuosly run in sliding window mode
+AVERAGE = 3             # Continuosly run in average mode
 
 # State flags
 thread_done = True      # Running core-1 thread has completed
@@ -144,10 +140,8 @@ dma0 = DMA_BASE + 0        # Select DMA channel 0
 #else:             # ushort (two byte) buffer
 #    adc_buffer = array.array('H', (0 for _ in range(ADC_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
 
-adc_buffer = array('H', (0 for _ in range(ADC_MAX_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
+adc_buffer = array.array('H', (0 for _ in range(ADC_MAX_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
                                                                     # Reserve space for maximum 6000 samples
-
-ctcss_out = array('f', (0 for _ in range(ADC_MAX_SAMPLES))) # 
 
 adc_init = ADC(Pin(ADC_PIN))    # initialize ADC Pin
 
@@ -166,25 +160,6 @@ pwm.value(True)
 # End of global stuff
 #
 #######################################################
-
-
-def ctcss_filter(sample_len):
-    global ctcss_out,adc_buffer
-    filt_param = array('i', (0 for _ in range(5)))
-
-    filt_param[0] = sample_len
-    filt_param[1] = len(coeffs_200k)
-    filt_param[2] = SCALE | COPY
-    #filt_param[2] = SCALE
-    filt_param[3] = 1  # Decimate
-    filt_param[4] = -1 # offset == -1: calculate mean
-    ctcss_out[0] = 0.975
-
-    t = time.ticks_us()
-    n_results = dcf(adc_buffer, ctcss_out, coeffs_200k, filt_param)
-    t = time.ticks_diff(time.ticks_us(), t)
-    return(n_results,t)
-
 
 ###############################################################################
 # Initialize the SSD1306 OLED display if present.
@@ -381,10 +356,6 @@ def vm(s):
         global mode, is_connected
         is_connected = True
 
-    def cmd_avg(p):
-        global mode
-        mode = CTCSS
-
     def cmd_dmp(p):
         global mode
         mode = DUMP
@@ -432,7 +403,6 @@ def vm(s):
         ">avg":cmd_avg,     # run in average mode
         ">bye":cmd_bye,     # disconnect from client
         ">con":cmd_con,     # connect to client
-        ">css>":cmd_css,    # filt er CTCSS mode
         ">dmp":cmd_dmp,     # dump one ADC buffer to serial port then halt
         ">flp":cmd_flp,     # flip display (only some OLEDs)
         ">hlt":cmd_hlt,     # halt
@@ -563,53 +533,6 @@ def run_meter_avg(cycles=C_CYCLES):
 
     thread_done = True
 
-def run_meter_ctcss(cycles=C_CYCLES):
-    global regs,thread_done, mv, mode, update_ready
-    
-    while mode == CTCSS:
-        median = 0
-        minv = 0
-        maxv = 0
-        err = 0
-        asn = time.ticks_us()    
-        tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
-        tm = wait_for_dma(ADC_BASE)
-     
-        #median += int( sum(adc_buffer[20:ADC_SAMPLES]) / (ADC_SAMPLES-20) )
-        #minv += min(adc_buffer[20:ADC_SAMPLES])
-        #maxv += max(adc_buffer[20:ADC_SAMPLES])
-        #P2P = int(maxv - minv)
-        #print("adc_buffer",P2P,minv,maxv,median)
-
-        n_results, tm = ctcss_filter(ADC_SAMPLES)
-
-
-        median += int( sum(adc_buffer[20:n_results]) / (n_results-20) )
-        minv += min(adc_buffer[20:n_results])
-        maxv += max(adc_buffer[20:n_results])
-        
-        #maxv = maxv >> C_SHIFT
-        #minv = minv >> C_SHIFT
-        if (maxv > 4065):
-            err = 1
-        elif  (minv < 20):
-            err = 2
-        P2P = int(maxv - minv)
-        #print("ctcss_out",P2P, minv,maxv,median, tm/1000)
-        #median = median >> C_SHIFT
-        #deviation = int(P2P * regs[4] + regs[5]) 
-        #deviation = int((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] )
-        deviation = int(((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] ) * regs[7])
-        ferror = int((median - regs[3]) * 5000/1555)
-        ase = time.ticks_us()
-        #mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,'a',err]
-        mv = ['c',err,deviation,ferror,P2P,median,regs[3],(ase-asn)/1000000]
-        #print(mv)
-        #mv = [(ase-asn)/1000000,deviation,P2P,regs[0],median,ferror,' ']
-        update_ready = True
-
-    thread_done = True
-
 def get_chr():
     global serial_buff, poll_obj
     if ps := poll_obj.poll(5):    # wait 5 milliseconds
@@ -641,7 +564,6 @@ def main():
     except:
         print("No config file, using program defaults")
 
-    mode = CTCSS
     while True:
         try:
             get_chr()
@@ -653,9 +575,6 @@ def main():
                 elif mode == METER:
                     thread_done = False
                     second_thread = _thread.start_new_thread(run_meter, ())
-                elif mode == CTCSS:
-                    thread_done = False
-                    second_thread = _thread.start_new_thread(run_meter_ctcss, ())
                 elif mode == DUMP:
                     thread_done = False
                     second_thread = _thread.start_new_thread(dump_buffer, ())
