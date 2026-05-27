@@ -381,7 +381,7 @@ def vm(s):
         global mode, is_connected
         is_connected = True
 
-    def cmd_avg(p):
+    def cmd_css(p):
         global mode
         mode = CTCSS
 
