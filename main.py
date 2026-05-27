@@ -26,7 +26,7 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.1.4 05/16/2026"
+VERSION = "1.1.5 05/27/2026"
 
 #OLED_TYPE = "SSD1306"
 #OLED_TYPE = "SH1106"
@@ -641,7 +641,6 @@ def main():
     except:
         print("No config file, using program defaults")
 
-    mode = CTCSS
     while True:
         try:
             get_chr()
