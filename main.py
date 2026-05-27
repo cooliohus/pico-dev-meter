@@ -26,7 +26,7 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.1.5 05/27/2026"
+VERSION = "1.1.6 05/27/2026"
 
 #OLED_TYPE = "SSD1306"
 #OLED_TYPE = "SH1106"
@@ -168,17 +168,22 @@ pwm.value(True)
 #######################################################
 
 
+###############################################################################
+# Apply a high pass filter to the ADC sample buffer to remove CTCSS tones.  The
+# filter automatically calculates the median / DC offset.  After filtering,
+# the results are copied back to the sample buffer with the DC offset restored
+#
 def ctcss_filter(sample_len):
     global ctcss_out,adc_buffer
     filt_param = array('i', (0 for _ in range(5)))
 
     filt_param[0] = sample_len
-    filt_param[1] = len(coeffs_200k)
-    filt_param[2] = SCALE | COPY
-    #filt_param[2] = SCALE
-    filt_param[3] = 1  # Decimate
-    filt_param[4] = -1 # offset == -1: calculate mean
-    ctcss_out[0] = 0.975
+    filt_param[1] = len(coeffs_200k)        # Filter coefficients with 200000 samples / sec rate
+    filt_param[2] = SCALE | COPY            # Apply scale factor and copy back to input
+    #filt_param[2] = WRAP | SCALE | COPY
+    filt_param[3] = 1                       # Decimate value
+    filt_param[4] = -1                      # offset == -1: calculate mean
+    ctcss_out[0] = 0.975                    # post filter scale factor
 
     t = time.ticks_us()
     n_results = dcf(adc_buffer, ctcss_out, coeffs_200k, filt_param)
@@ -226,7 +231,7 @@ def update_display(ooled,dev,ferror, err):
         if DEBUG:
             print("Updating Dislay",dev,ferror)
         if err == 0:
-            s1 = '{:>4}'.format(dev) + " Hz."
+            s1 = '{:>4}'.format(dev) + " Hz"
         elif err == 1:
             s1 = "Overflow"
         elif err == 2:
@@ -237,8 +242,22 @@ def update_display(ooled,dev,ferror, err):
         ooled.fill(0) # clear screen
         ooled.fill_rect(0, 0, 127, 63, 1) # build big border
         ooled.fill_rect(2, 2, 124, 60, 0)
-        ooled.text("Deviation:",25,10)
-        ooled.text(" "+ s1 ,20,25)
+        if mode == METER:
+            txt = "METER"
+        elif mode == HALT:
+            txt = "HALT"
+        elif mode == AVERAGE:
+            txt = "AVG"
+        elif mode == CTCSS:
+            txt = "CTCSS"
+        else:
+            txt = "UNKNOWN"
+        ooled.text("Mode: "+txt,5,10)
+        ooled.text(" Dev: "+ s1 ,5,28)
+
+
+        #ooled.text("Deviation:",25,10)
+        #ooled.text(" "+ s1 ,20,25)
         if abs(ferror) < 6:
             ferror = 0
         s1 = '{:>4}'.format(ferror)
@@ -383,7 +402,9 @@ def vm(s):
 
     def cmd_css(p):
         global mode
-        mode = CTCSS
+        if cpu_type == 'RP2350':
+            # only works on pico2
+            mode = CTCSS
 
     def cmd_dmp(p):
         global mode
@@ -432,7 +453,7 @@ def vm(s):
         ">avg":cmd_avg,     # run in average mode
         ">bye":cmd_bye,     # disconnect from client
         ">con":cmd_con,     # connect to client
-        ">css>":cmd_css,    # filt er CTCSS mode
+        ">css":cmd_css,    # filt er CTCSS mode
         ">dmp":cmd_dmp,     # dump one ADC buffer to serial port then halt
         ">flp":cmd_flp,     # flip display (only some OLEDs)
         ">hlt":cmd_hlt,     # halt
