@@ -26,7 +26,7 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.1.8 06/02/2026"
+VERSION = "1.1.9 06/02/2026"
 
 
 IO_BANK0_BASE = 0x40028000
@@ -180,7 +180,7 @@ pwm.value(True)
 # Set up pin definitions for 1x4 keypad and configure
 # input values to invert to simplify key scan code
 buttonPins = [2,3,4,5]
-print("Init button pins")
+#print("Init button pins")
 for item in buttonPins:
     Pin(item,Pin.IN,Pin.PULL_UP)
     pin_reg_ctrl = IO_BANK0_BASE + (item * IO_REG_W) + IO_REG_CTRL
@@ -232,7 +232,7 @@ def get_key():
             elif i == 2:
                 vm(">avg")
             elif i==3:
-                vm("flp")
+                vm(">flp")
             break
 
 
