@@ -231,6 +231,8 @@ def get_key():
                 vm(">css")
             elif i == 2:
                 vm(">avg")
+            elif i==3:
+                vm("flp")
             break
 
 
