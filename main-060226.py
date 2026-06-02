@@ -26,12 +26,7 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.1.8 06/02/2026"
-
-
-IO_BANK0_BASE = 0x40028000
-IO_REG_W      = 8
-IO_REG_CTRL   = 4
+VERSION = "1.1.7 05/28/2026"
 
 #OLED_TYPE = "SSD1306"
 #OLED_TYPE = "SH1106"
@@ -77,8 +72,6 @@ C_SCALE = 1.0
 
 result_buffer = array('i', (0 for _ in range(3+C_CYCLES)))
 result_buffer[0] = len(result_buffer)
-
-key_buff = array('B',[0]) 
 
 if cpu_type == 'RP2350':
     if DEBUG:
@@ -177,17 +170,6 @@ pwm.value(True)
 #######################################################
 
 
-# Set up pin definitions for 1x4 keypad and configure
-# input values to invert to simplify key scan code
-buttonPins = [2,3,4,5]
-print("Init button pins")
-for item in buttonPins:
-    Pin(item,Pin.IN,Pin.PULL_UP)
-    pin_reg_ctrl = IO_BANK0_BASE + (item * IO_REG_W) + IO_REG_CTRL
-    ctl = mem32[pin_reg_ctrl]
-    mem32[pin_reg_ctrl] = ctl | 0b01 << 16
-
-
 ###############################################################################
 # Apply a high pass filter to the ADC sample buffer to remove CTCSS tones.  The
 # filter automatically calculates the median / DC offset.  After filtering,
@@ -209,80 +191,6 @@ def ctcss_filter(sample_len):
     n_results = dcf(adc_buffer, ctcss_out, coeffs_200k, filt_param)
     t = time.ticks_diff(time.ticks_us(), t)
     return(n_results,t)
-
-
-
-
-# ISR values returned from the keyscan state machine
-# corresponding to the four keypad buttons
-button_val = [0b10,0b1,0b1000,0b100]
-
-def get_key():
-    # called from the keypad pio block when a new button press is ready
-    global key_buff
-    sm_getkey.get(key_buff,0)
-    #print("keyval =",bin(key_buff[0]))
-    for i in range(4):
-        if key_buff[0] == button_val[i]:
-            #print("Button",i+1)
-            if i == 0:
-                vm(">run")
-            elif i == 1:
-                vm(">css")
-            elif i == 2:
-                vm(">avg")
-            break
-
-
-# pio block to read the keypad.  Note that to simplify the code the four
-# gpio pins are congigured to invert 
-#@rp2.asm_pio(set_init=[rp2.PIO.IN_HIGH] *4, in_shiftdir=0, autopush=False,autopull=False)
-@rp2.asm_pio(in_shiftdir=0, autopush=False,autopull=False)
-
-def keypad_getkey():
-    set(y,0)                 # scratch y is constant 0
-    wrap_target()
-    label("loop")
-    mov(isr,y)               # clear ISR register (it shifts on input)
-    in_(pins, 4)             # read four button gpio pins into the ISR
-    mov(x, isr)              # copy the input shift register (ISR) to the x scratch register
-    jmp(not_x, "loop")       # if x = 0, no key was pressed, jump to top
-    push(noblock)            # otherwise a key was pressed, push the ISR into the RX FIFO
-    irq(0)                   # generate "key available" interrupt then
-                             # fall through to debounce code
-
-    # debounce routine, wait for all keys up. The side effect is key roll-over and
-    # key repeat are inhibited... which is possibly a good thing :-)
-    #
-    label("debounce")
-    set(x,0)[31]             # set x to zero and add some delays
-    set(x,0)[31]             #
-    set(x,0)[31]             #
-    set(x,0)[31]             # 
-    mov(isr,x)[31]           # clear ISR register and delay
-    in_(pins,4)[31]          # input four column lines and delay
-    mov(x,isr)               # move to x register
-    jmp(x_dec,"debounce")    # if not 0 a button is still pressed, jump to start of debounce loop
-    wrap()                   # loop back to the top (wrap_target)and wait for the next keypress
-
-
-
-def sm_getkey_irq(sm):
-    #print("flags: ",hex(sm.irq().flags()), sm)
-    # Don't bother checking which interrupt as there is only one
-    # Call get_key to read the new lkey from the state machine FIFO and process it
-    get_key()
-
-
-# Create state machine 0 in PIO 0 with a modest clock speed
-# note that row pins are assumed to be contiguous atsrting at 2 and column pins starting at 2
-sm_getkey = rp2.StateMachine(0, keypad_getkey, freq=5_000, set_base=Pin(2), in_base=Pin(2))
-
-# Set the PIO zero interrupt handler to sm_getkey_irq
-rp2.PIO(0).irq(handler=sm_getkey_irq,hard=False)
-
-# Enable / start the get_key state machine
-sm_getkey.active(1)
 
 
 ###############################################################################
