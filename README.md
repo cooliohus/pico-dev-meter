@@ -12,8 +12,11 @@ Start the meter in AVERAGE mode using DMA buffer averaging.  See also >run
 Sent by an appliction to disconnect from the meter.  The meter will stop sending status information to the serial port
 
 ### >con
-
 Sent by an application to connect to the meter.  The meter will start sending status information to the serial port
+
+### >css
+Change the mode to CTCSS filter to remove a PL Tone if present.  Use >run to return to non-filtered mode.  I plan to 
+make this a togggle option later.
 
 ### >dmp
 
@@ -58,6 +61,12 @@ Store the average DC value of the current DMA buffer to register r[3].  This val
 ### scf
 
 Save the current register values to the configuration file
+
+## >ssr
+Change sample rate and sample counr (Store Sample Rate)
+```
+    >ssr,<sample rate>,<sample count>
+```
 
 ### >str
 Store a new value to a configuration register

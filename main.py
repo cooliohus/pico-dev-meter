@@ -26,7 +26,7 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.2.0 06/04/2026"
+VERSION = "1.2.2 06/04/2026"
 
 
 IO_BANK0_BASE = 0x40028000
@@ -209,7 +209,8 @@ def ctcss_filter(sample_len):
     #filt_param[2] = WRAP | SCALE | COPY
     filt_param[3] = 1                       # Decimate value
     filt_param[4] = -1                      # offset == -1: calculate mean
-    ctcss_out[0] = 0.975                    # post filter scale factor
+    #ctcss_out[0] = 0.975                    # post filter scale factor
+    ctcss_out[0] = 1.005                    # post filter scale factor
 
     t = time.ticks_us()
     n_results = dcf(adc_buffer, ctcss_out, coeffs_200k, filt_param)
@@ -537,7 +538,6 @@ def vm(s):
 
     def cmd_ssr(p):
         global mode,ADC_RATE,ADC_SAMPLES,regs
-        print("ssr",p)
         if len(p) != 3:
             print("Incorrect parameters for ssr command")
         else:
@@ -724,30 +724,32 @@ def run_meter_ctcss(cycles=C_CYCLES):
         minv = 0
         maxv = 0
         err = 0
-        asn = time.ticks_us()    
-        tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
-        tm = wait_for_dma(ADC_BASE)
-     
-        #median += int( sum(adc_buffer[20:ADC_SAMPLES]) / (ADC_SAMPLES-20) )
-        #minv += min(adc_buffer[20:ADC_SAMPLES])
-        #maxv += max(adc_buffer[20:ADC_SAMPLES])
+        asn = time.ticks_us()
+        #for i in range(C_CYCLES):
+        for i in range(6):
+            tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
+            tm = wait_for_dma(ADC_BASE)
+            n_results, tm = ctcss_filter(ADC_SAMPLES)
+            median += int( sum(adc_buffer[20:ADC_SAMPLES]) / (n_results-20) )
+            minv += min(adc_buffer[20:ADC_SAMPLES])
+            maxv += max(adc_buffer[20:ADC_SAMPLES])
+        
         #P2P = int(maxv - minv)
         #print("adc_buffer",P2P,minv,maxv,median)
 
-        n_results, tm = ctcss_filter(ADC_SAMPLES)
-
-
-        median += int( sum(adc_buffer[20:n_results]) / (n_results-20) )
-        minv += min(adc_buffer[20:n_results])
-        maxv += max(adc_buffer[20:n_results])
+        #median += int( sum(adc_buffer[20:n_results]) / (n_results-20) )
+        #minv += min(adc_buffer[20:n_results])
+        #maxv += max(adc_buffer[20:n_results])
         
-        #maxv = maxv >> C_SHIFT
-        #minv = minv >> C_SHIFT
+        #maxv = maxv >> 2
+        #minv = minv >> 2
+        maxv = int(maxv / 6)
+        minv =int(minv / 6)
         if (maxv > 4065):
             err = 1
         elif  (minv < 20):
             err = 2
-        P2P = int(maxv - minv)
+        P2P = int((maxv - minv) * 1.00)
         #print("ctcss_out",P2P, minv,maxv,median, tm/1000)
         #median = median >> C_SHIFT
         #deviation = int(P2P * regs[4] + regs[5]) 
