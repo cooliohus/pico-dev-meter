@@ -17,13 +17,21 @@
 #    The author can be contacted by email at k3jse@coolioh.com
 
 import uctypes, time, array, sys, select
+from array import array
 from machine import mem32,mem16, mem8, ADC, Pin, I2C
 from os import uname
+from filt import dcf, WRAP, SCALE, REVERSE, COPY  # fir filter code
+from coeffs_200k import coeffs_200k               # fir filter high pass coefficients
 import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.1.4 05/16/2026"
+VERSION = "1.1.10 06/02/2026"
+
+
+IO_BANK0_BASE = 0x40028000
+IO_REG_W      = 8
+IO_REG_CTRL   = 4
 
 #OLED_TYPE = "SSD1306"
 #OLED_TYPE = "SH1106"
@@ -34,7 +42,8 @@ OLED_TYPE = "NONE"
 import os
 try:
     if os.stat("sh1106.py"):
-        print("found 1106 driver")
+        if DEBUG:
+            print("found 1106 driver")
         OLED_TYPE = "SH1106"
         from sh1106 import SH1106_I2C
 except Exception as e:
@@ -43,14 +52,16 @@ except Exception as e:
     
 try:
     if os.stat("ssd1306.py"):
-        print("found 1306 driver")
+        if DEBUG:
+            print("found 1306 driver")
         OLED_TYPE = "SSD1306"
         from ssd1306 import SSD1306_I2C
 except Exception as e:
     #print("SSD1306 not found",e)
     pass
 
-print("OLED Type",OLED_TYPE)
+if DEBUG:
+    print("OLED Type",OLED_TYPE)
 
 #if OLED_TYPE == "SSD1306":
 #    from ssd1306 import SSD1306_I2C
@@ -63,10 +74,11 @@ C_SHIFT = 3
 C_CYCLES = 2**C_SHIFT
 C_SCALE = 1.0
 
-print("C_CYCLES:",C_CYCLES)
 
-result_buffer = array.array('i', (0 for _ in range(3+C_CYCLES)))
+result_buffer = array('i', (0 for _ in range(3+C_CYCLES)))
 result_buffer[0] = len(result_buffer)
+
+key_buff = array('B',[0]) 
 
 if cpu_type == 'RP2350':
     if DEBUG:
@@ -86,15 +98,17 @@ elif cpu_type == 'RP2040':
 #######################################################
 
 # Operating modes
-HALT = 0                # Meter is idle / halted
-DUMP = 1                # Dump one DMA buffer to the serial port
-METER = 2               # Continuosly run in sliding window mode
-AVERAGE = 3             # Continuosly run in average mode
+HALT = const(0)                # Meter is idle / halted
+DUMP = const(1)                # Dump one DMA buffer to the serial port
+METER = const(2)               # Continuosly run in sliding window mode
+AVERAGE = const(3)             # Continuosly run in average mode
+CTCSS = const(4)               # Continuosly run in CTCSS filter mode
 
 # State flags
 thread_done = True      # Running core-1 thread has completed
 is_connected = False    # There is an application connected, send data to serial port
 update_ready = False    # A data collection cycle has completed
+ctcss = False
 
 mode = METER            # Start in METER mode
 
@@ -140,8 +154,10 @@ dma0 = DMA_BASE + 0        # Select DMA channel 0
 #else:             # ushort (two byte) buffer
 #    adc_buffer = array.array('H', (0 for _ in range(ADC_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
 
-adc_buffer = array.array('H', (0 for _ in range(ADC_MAX_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
+adc_buffer = array('H', (0 for _ in range(ADC_MAX_SAMPLES)))  # DMA buffer for ADC, 'H' = ushort, two bytes
                                                                     # Reserve space for maximum 6000 samples
+
+ctcss_out = array('f', (0 for _ in range(ADC_MAX_SAMPLES))) # 
 
 adc_init = ADC(Pin(ADC_PIN))    # initialize ADC Pin
 
@@ -160,6 +176,117 @@ pwm.value(True)
 # End of global stuff
 #
 #######################################################
+
+
+# Set up pin definitions for 1x4 keypad and configure
+# input values to invert to simplify key scan code
+buttonPins = [2,3,4,5]
+#print("Init button pins")
+for item in buttonPins:
+    Pin(item,Pin.IN,Pin.PULL_UP)
+    pin_reg_ctrl = IO_BANK0_BASE + (item * IO_REG_W) + IO_REG_CTRL
+    ctl = mem32[pin_reg_ctrl]
+    mem32[pin_reg_ctrl] = ctl | 0b01 << 16
+
+
+###############################################################################
+# Apply a high pass filter to the ADC sample buffer to remove CTCSS tones.  The
+# filter automatically calculates the median / DC offset.  After filtering,
+# the results are copied back to the sample buffer with the DC offset restored
+#
+def ctcss_filter(sample_len):
+    global ctcss_out,adc_buffer
+    filt_param = array('i', (0 for _ in range(5)))
+
+    filt_param[0] = sample_len
+    filt_param[1] = len(coeffs_200k)        # Filter coefficients with 200000 samples / sec rate
+    filt_param[2] = SCALE | COPY            # Apply scale factor and copy back to input
+    #filt_param[2] = WRAP | SCALE | COPY
+    filt_param[3] = 1                       # Decimate value
+    filt_param[4] = -1                      # offset == -1: calculate mean
+    ctcss_out[0] = 0.975                    # post filter scale factor
+
+    t = time.ticks_us()
+    n_results = dcf(adc_buffer, ctcss_out, coeffs_200k, filt_param)
+    t = time.ticks_diff(time.ticks_us(), t)
+    return(n_results,t)
+
+
+
+
+# ISR values returned from the keyscan state machine
+# corresponding to the four keypad buttons
+button_val = [0b10,0b1,0b1000,0b100]
+
+def get_key():
+    # called from the keypad pio block when a new button press is ready
+    global key_buff
+    sm_getkey.get(key_buff,0)
+    #print("keyval =",bin(key_buff[0]))
+    for i in range(4):
+        if key_buff[0] == button_val[i]:
+            #print("Button",i+1)
+            if i == 0:
+                vm(">run")
+            elif i == 1:
+                vm(">css")
+            elif i == 2:
+                vm(">avg")
+            elif i==3:
+                vm(">flp")
+            break
+
+
+# pio block to read the keypad.  Note that to simplify the code the four
+# gpio pins are congigured to invert 
+#@rp2.asm_pio(set_init=[rp2.PIO.IN_HIGH] *4, in_shiftdir=0, autopush=False,autopull=False)
+@rp2.asm_pio(in_shiftdir=0, autopush=False,autopull=False)
+
+def keypad_getkey():
+    set(y,0)                 # scratch y is constant 0
+    wrap_target()
+    label("loop")
+    mov(isr,y)               # clear ISR register (it shifts on input)
+    in_(pins, 4)             # read four button gpio pins into the ISR
+    mov(x, isr)              # copy the input shift register (ISR) to the x scratch register
+    jmp(not_x, "loop")       # if x = 0, no key was pressed, jump to top
+    push(noblock)            # otherwise a key was pressed, push the ISR into the RX FIFO
+    irq(0)                   # generate "key available" interrupt then
+                             # fall through to debounce code
+
+    # debounce routine, wait for all keys up. The side effect is key roll-over and
+    # key repeat are inhibited... which is possibly a good thing :-)
+    #
+    label("debounce")
+    set(x,0)[31]             # set x to zero and add some delays
+    set(x,0)[31]             #
+    set(x,0)[31]             #
+    set(x,0)[31]             # 
+    mov(isr,x)[31]           # clear ISR register and delay
+    in_(pins,4)[31]          # input four column lines and delay
+    mov(x,isr)               # move to x register
+    jmp(x_dec,"debounce")    # if not 0 a button is still pressed, jump to start of debounce loop
+    wrap()                   # loop back to the top (wrap_target)and wait for the next keypress
+
+
+
+def sm_getkey_irq(sm):
+    #print("flags: ",hex(sm.irq().flags()), sm)
+    # Don't bother checking which interrupt as there is only one
+    # Call get_key to read the new lkey from the state machine FIFO and process it
+    get_key()
+
+
+# Create state machine 0 in PIO 0 with a modest clock speed
+# note that row pins are assumed to be contiguous atsrting at 2 and column pins starting at 2
+sm_getkey = rp2.StateMachine(0, keypad_getkey, freq=5_000, set_base=Pin(2), in_base=Pin(2))
+
+# Set the PIO zero interrupt handler to sm_getkey_irq
+rp2.PIO(0).irq(handler=sm_getkey_irq,hard=False)
+
+# Enable / start the get_key state machine
+sm_getkey.active(1)
+
 
 ###############################################################################
 # Initialize the SSD1306 OLED display if present.
@@ -180,11 +307,13 @@ def init_oled(x,y) -> tuple:
     i2c_dev = I2C(0,scl=Pin(21),sda=Pin(20),freq=400000)  # start I2C on I2C0 (GPIO 20/21)
     i2c_addr = [hex(ii) for ii in i2c_dev.scan()]         # get I2C address in hex format
     if i2c_addr==[]:
-        print('No I2C Display Found') 
+        if DEBUG:
+            print('No I2C Display Found') 
         return(False,False)
     else:
-        print("I2C Address      : {}".format(i2c_addr[0])) # I2C device address
-        print("I2C Configuration: {}".format(i2c_dev))     # print I2C params
+        if DEBUG:
+            print("I2C Address      : {}".format(i2c_addr[0])) # I2C device address
+            print("I2C Configuration: {}".format(i2c_dev))     # print I2C params
         if OLED_TYPE == "SSD1306":
             oled = SSD1306_I2C(pix_res_x, pix_res_y, i2c_dev)  # oled controller
         elif OLED_TYPE == "SH1106":
@@ -201,19 +330,38 @@ def update_display(ooled,dev,ferror, err):
         if DEBUG:
             print("Updating Dislay",dev,ferror)
         if err == 0:
-            s1 = '{:>4}'.format(dev) + " Hz."
-        elif err == 1:
-            s1 = "Overflow"
-        elif err == 2:
-            s1 = "Undeflow"
+            s1 = '{:>4}'.format(dev) + " Hz"
         else:
-            s1 = "Unknown"
+            s1 = "Range Err"
+            ferror = 0
+        #elif err == 1:
+        #    s1 = "Overflow"
+        #elif err == 2:
+        #    s1 = "Undeflow"
+        #else:
+        #    s1 = "Unknown"
 
         ooled.fill(0) # clear screen
         ooled.fill_rect(0, 0, 127, 63, 1) # build big border
         ooled.fill_rect(2, 2, 124, 60, 0)
-        ooled.text("Deviation:",25,10)
-        ooled.text(" "+ s1 ,20,25)
+        if mode == METER:
+            txt = "METER"
+        elif mode == HALT:
+            txt = "HALT"
+        elif mode == AVERAGE:
+            txt = "AVG"
+        elif mode == CTCSS:
+            txt = "CTCSS"
+        elif mode == DUMP:
+            txt = "DUMP"
+        else:
+            txt = "UNKNOWN"
+        ooled.text("Mode: "+txt,5,10)
+        ooled.text(" Dev: "+ s1 ,5,28)
+
+
+        #ooled.text("Deviation:",25,10)
+        #ooled.text(" "+ s1 ,20,25)
         if abs(ferror) < 6:
             ferror = 0
         s1 = '{:>4}'.format(ferror)
@@ -356,6 +504,12 @@ def vm(s):
         global mode, is_connected
         is_connected = True
 
+    def cmd_css(p):
+        global mode
+        if cpu_type == 'RP2350':
+            # only works on pico2
+            mode = CTCSS
+
     def cmd_dmp(p):
         global mode
         mode = DUMP
@@ -403,6 +557,7 @@ def vm(s):
         ">avg":cmd_avg,     # run in average mode
         ">bye":cmd_bye,     # disconnect from client
         ">con":cmd_con,     # connect to client
+        ">css":cmd_css,    # filt er CTCSS mode
         ">dmp":cmd_dmp,     # dump one ADC buffer to serial port then halt
         ">flp":cmd_flp,     # flip display (only some OLEDs)
         ">hlt":cmd_hlt,     # halt
@@ -420,7 +575,7 @@ def vm(s):
         opcodes[cmdstr[0]](cmdstr)
 
 def dump_buffer():
-    global mode, thread_done, regs
+    global mode, thread_done, regs, ctcss
     minv = 0
     maxv = 0
     #print("dump buffer")
@@ -428,8 +583,15 @@ def dump_buffer():
     tm = adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
     tm = wait_for_dma(ADC_BASE)
     #tm = lp_filter(adc_buffer,ADC_SAMPLES)
-    minv = min(adc_buffer[20:ADC_SAMPLES])
-    maxv = max(adc_buffer[20:ADC_SAMPLES])
+
+    if ctcss:
+        n_results, tm = ctcss_filter(ADC_SAMPLES)
+        #median += int( sum(adc_buffer[20:n_results]) / (n_results-20) )
+        minv = min(adc_buffer[20:n_results])
+        maxv = max(adc_buffer[20:n_results])
+    else:
+        minv = min(adc_buffer[20:ADC_SAMPLES])
+        maxv = max(adc_buffer[20:ADC_SAMPLES])
 
     P2P =  maxv - minv
 
@@ -533,6 +695,53 @@ def run_meter_avg(cycles=C_CYCLES):
 
     thread_done = True
 
+def run_meter_ctcss(cycles=C_CYCLES):
+    global regs,thread_done, mv, mode, update_ready
+    
+    while mode == CTCSS:
+        median = 0
+        minv = 0
+        maxv = 0
+        err = 0
+        asn = time.ticks_us()    
+        tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
+        tm = wait_for_dma(ADC_BASE)
+     
+        #median += int( sum(adc_buffer[20:ADC_SAMPLES]) / (ADC_SAMPLES-20) )
+        #minv += min(adc_buffer[20:ADC_SAMPLES])
+        #maxv += max(adc_buffer[20:ADC_SAMPLES])
+        #P2P = int(maxv - minv)
+        #print("adc_buffer",P2P,minv,maxv,median)
+
+        n_results, tm = ctcss_filter(ADC_SAMPLES)
+
+
+        median += int( sum(adc_buffer[20:n_results]) / (n_results-20) )
+        minv += min(adc_buffer[20:n_results])
+        maxv += max(adc_buffer[20:n_results])
+        
+        #maxv = maxv >> C_SHIFT
+        #minv = minv >> C_SHIFT
+        if (maxv > 4065):
+            err = 1
+        elif  (minv < 20):
+            err = 2
+        P2P = int(maxv - minv)
+        #print("ctcss_out",P2P, minv,maxv,median, tm/1000)
+        #median = median >> C_SHIFT
+        #deviation = int(P2P * regs[4] + regs[5]) 
+        #deviation = int((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] )
+        deviation = int(((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] ) * regs[7])
+        ferror = int((median - regs[3]) * 5000/1555)
+        ase = time.ticks_us()
+        #mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,'a',err]
+        mv = ['c',err,deviation,ferror,P2P,median,regs[3],(ase-asn)/1000000]
+        #print(mv)
+        #mv = [(ase-asn)/1000000,deviation,P2P,regs[0],median,ferror,' ']
+        update_ready = True
+
+    thread_done = True
+
 def get_chr():
     global serial_buff, poll_obj
     if ps := poll_obj.poll(5):    # wait 5 milliseconds
@@ -553,7 +762,7 @@ def get_chr():
 
 
 def main():
-    global oled, have_oled, thread_done, is_connected, mode, update_ready, poll_obj
+    global oled, have_oled, thread_done, is_connected, mode, update_ready, poll_obj, ctcss
     
     #print("ADC_1 Return:",hex(adc_read_1_dbg(ADC_BASE) 
     (oled, have_oled) = init_oled(128,64)
@@ -571,10 +780,16 @@ def main():
             if thread_done:
                 if mode == AVERAGE:
                     thread_done = False
+                    ctcss = False
                     second_thread = _thread.start_new_thread(run_meter_avg, ())
                 elif mode == METER:
                     thread_done = False
+                    ctcss = False
                     second_thread = _thread.start_new_thread(run_meter, ())
+                elif mode == CTCSS:
+                    thread_done = False
+                    ctcss = True
+                    second_thread = _thread.start_new_thread(run_meter_ctcss, ())
                 elif mode == DUMP:
                     thread_done = False
                     second_thread = _thread.start_new_thread(dump_buffer, ())

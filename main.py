@@ -26,7 +26,7 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.1.9 06/02/2026"
+VERSION = "1.2.0 06/04/2026"
 
 
 IO_BANK0_BASE = 0x40028000
@@ -70,7 +70,7 @@ if DEBUG:
 
 cpu_type = uname().machine.split(' ')[-1]
 
-C_SHIFT = 3
+C_SHIFT = 4
 C_CYCLES = 2**C_SHIFT
 C_SCALE = 1.0
 
@@ -108,6 +108,7 @@ CTCSS = const(4)               # Continuosly run in CTCSS filter mode
 thread_done = True      # Running core-1 thread has completed
 is_connected = False    # There is an application connected, send data to serial port
 update_ready = False    # A data collection cycle has completed
+ctcss = False
 
 mode = METER            # Start in METER mode
 
@@ -122,10 +123,15 @@ poll_obj.register(sys.stdin, select.POLLIN)
 serial_buff = ""
 
 # initialize operating parameter base on cpu type (RP2040, RP2350) 
+#if cpu_type == 'RP2350':
+#    regs = [200_000, 5000, C_SHIFT, 2047, 0.000015263812, 1.614238, -99.826, C_SCALE, 5000/1550, VERSION]    # HP
+#else:
+#    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001200482, 1.630135, -102.449, C_SCALE, 5000/1550, VERSION]  # HP#
+
 if cpu_type == 'RP2350':
-    regs = [200_000, 5000, C_SHIFT, 2047, 0.000015263812, 1.614238, -99.826, C_SCALE, 5000/1550, VERSION]    # HP
+    regs = [50_000, 1250, C_SHIFT, 2047, 0.000015263812, 1.614238, -99.826, C_SCALE, 5000/1550, VERSION]    # HP
 else:
-    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001200482, 1.630135, -102.449, C_SCALE, 5000/1550, VERSION]  # HP
+    regs = [50_000, 1250, C_SHIFT, 2047, 0.00001200482, 1.630135, -102.449, C_SCALE, 5000/1550, VERSION]  # HP
 
 # Global list for display updates
 mv = ['r',0,0,0,0,0,2047,0]   # meter values
@@ -382,6 +388,10 @@ def load_regs(p):
     import json
     with open('regs.json', 'r') as f:
         regs = json.load(f)
+    # Kludge to update version in saved regs file
+    if regs[9] != VERSION:
+        regs[9] = VERSION
+        save_regs(p)
 
 def adc_read_1_dbg(adc) -> int:
     # Get one DMA sample
@@ -525,6 +535,17 @@ def vm(s):
         global mode
         print(regs)
 
+    def cmd_ssr(p):
+        global mode,ADC_RATE,ADC_SAMPLES,regs
+        print("ssr",p)
+        if len(p) != 3:
+            print("Incorrect parameters for ssr command")
+        else:
+            ADC_RATE = int(p[1])
+            ADC_SAMPLES = int(p[2])
+            regs[0] = ADC_RATE
+            regs[1] = ADC_SAMPLES
+
     def cmd_stm(p):
         global regs, mv
         regs[3] =  mv[5]   # assumes meter is running
@@ -563,6 +584,7 @@ def vm(s):
         ">lsr":cmd_lsr,     # list registers
         ">rcf":load_regs,   # load registers from config file
         ">run":cmd_run,     # run in sliding window mode
+        ">ssr":cmd_ssr,
         ">stm":cmd_stm,     # stoe median value to registers
         ">scf":save_regs,   # save current registers to config file
         ">str":cmd_str,     # store value to register
@@ -574,7 +596,7 @@ def vm(s):
         opcodes[cmdstr[0]](cmdstr)
 
 def dump_buffer():
-    global mode, thread_done, regs
+    global mode, thread_done, regs, ctcss
     minv = 0
     maxv = 0
     #print("dump buffer")
@@ -582,8 +604,15 @@ def dump_buffer():
     tm = adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
     tm = wait_for_dma(ADC_BASE)
     #tm = lp_filter(adc_buffer,ADC_SAMPLES)
-    minv = min(adc_buffer[20:ADC_SAMPLES])
-    maxv = max(adc_buffer[20:ADC_SAMPLES])
+
+    if ctcss:
+        n_results, tm = ctcss_filter(ADC_SAMPLES)
+        #median += int( sum(adc_buffer[20:n_results]) / (n_results-20) )
+        minv = min(adc_buffer[20:n_results])
+        maxv = max(adc_buffer[20:n_results])
+    else:
+        minv = min(adc_buffer[20:ADC_SAMPLES])
+        maxv = max(adc_buffer[20:ADC_SAMPLES])
 
     P2P =  maxv - minv
 
@@ -592,7 +621,7 @@ def dump_buffer():
     adc_buffer[0] = ADC_SAMPLES
     adc_buffer[1] = deviation
     #print(*adc_buffer[ADC_SAMPLES-10])
-    print(*adc_buffer)
+    print(*adc_buffer[0:ADC_SAMPLES])
     mode = HALT
     thread_done = True
 
@@ -754,7 +783,7 @@ def get_chr():
 
 
 def main():
-    global oled, have_oled, thread_done, is_connected, mode, update_ready, poll_obj
+    global oled, have_oled, thread_done, is_connected, mode, update_ready, poll_obj, ctcss
     
     #print("ADC_1 Return:",hex(adc_read_1_dbg(ADC_BASE) 
     (oled, have_oled) = init_oled(128,64)
@@ -772,12 +801,15 @@ def main():
             if thread_done:
                 if mode == AVERAGE:
                     thread_done = False
+                    ctcss = False
                     second_thread = _thread.start_new_thread(run_meter_avg, ())
                 elif mode == METER:
                     thread_done = False
+                    ctcss = False
                     second_thread = _thread.start_new_thread(run_meter, ())
                 elif mode == CTCSS:
                     thread_done = False
+                    ctcss = True
                     second_thread = _thread.start_new_thread(run_meter_ctcss, ())
                 elif mode == DUMP:
                     thread_done = False
