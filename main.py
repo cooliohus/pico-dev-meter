@@ -26,7 +26,7 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.2.2 06/04/2026"
+VERSION = "1.2.3 06/04/2026"
 
 
 IO_BANK0_BASE = 0x40028000
@@ -730,7 +730,7 @@ def run_meter_ctcss(cycles=C_CYCLES):
             tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
             tm = wait_for_dma(ADC_BASE)
             n_results, tm = ctcss_filter(ADC_SAMPLES)
-            median += int( sum(adc_buffer[20:ADC_SAMPLES]) / (n_results-20) )
+            median += int( sum(adc_buffer[20:n_results]) / (n_results-20) )
             minv += min(adc_buffer[20:ADC_SAMPLES])
             maxv += max(adc_buffer[20:ADC_SAMPLES])
         
@@ -743,19 +743,21 @@ def run_meter_ctcss(cycles=C_CYCLES):
         
         #maxv = maxv >> 2
         #minv = minv >> 2
+        median = int(median / 6)
         maxv = int(maxv / 6)
         minv =int(minv / 6)
         if (maxv > 4065):
             err = 1
         elif  (minv < 20):
             err = 2
-        P2P = int((maxv - minv) * 1.00)
+        P2P = maxv - minv
         #print("ctcss_out",P2P, minv,maxv,median, tm/1000)
         #median = median >> C_SHIFT
         #deviation = int(P2P * regs[4] + regs[5]) 
         #deviation = int((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] )
         deviation = int(((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] ) * regs[7])
         ferror = int((median - regs[3]) * 5000/1555)
+        #ferror = int(median  * 5000/1555)
         ase = time.ticks_us()
         #mv = [(ase-asn)/1000000,deviation,P2P,regs[3],median,ferror,'a',err]
         mv = ['c',err,deviation,ferror,P2P,median,regs[3],(ase-asn)/1000000]
