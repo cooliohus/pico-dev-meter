@@ -26,7 +26,7 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.2.3 06/04/2026"
+VERSION = "1.2.4 06/04/2026"
 
 
 IO_BANK0_BASE = 0x40028000
@@ -526,7 +526,8 @@ def vm(s):
 
     def cmd_flp(p):
         global oled
-        oled.flip()
+        if OLED_TYPE == "SH1106":
+            oled.flip()
 
     def cmd_hlt(p):
         global mode
