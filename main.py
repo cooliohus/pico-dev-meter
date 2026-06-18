@@ -26,7 +26,7 @@ import _thread
 
 DEBUG = False           # print debug and timing information
 
-VERSION = "1.2.5 06/05/2026"
+VERSION = "1.2.8 06/18/2026"
 
 
 IO_BANK0_BASE = 0x40028000
@@ -110,7 +110,7 @@ is_connected = False    # There is an application connected, send data to serial
 update_ready = False    # A data collection cycle has completed
 ctcss = False
 
-mode = METER            # Start in METER mode
+mode = AVERAGE          # Start in Average mode
 
 #result_buffer = array.array('i', (0 for _ in range(3+8)))
 #result_buffer[0] = len(result_buffer)
@@ -129,7 +129,7 @@ serial_buff = ""
 #    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001200482, 1.630135, -102.449, C_SCALE, 5000/1550, VERSION]  # HP#
 
 if cpu_type == 'RP2350':
-    regs = [50_000, 1250, C_SHIFT, 2047, 0.000014864995, 1.6073985, -88.491, C_SCALE, 5000/1550, VERSION]    # HP
+    regs = [50_000, 1250, C_SHIFT, 2047, 0.000015722322, 1.609176, -74.5396, C_SCALE, 5000/1550, VERSION]    # ha2350c
 else:
     regs = [50_000, 1250, C_SHIFT, 2047, 0.00001200482, 1.630135, -102.449, C_SCALE, 5000/1550, VERSION]  # HP
 
@@ -455,7 +455,8 @@ def adc_read_multi(adc,rate,samples) -> int:
     mem32[adc+ADC_CS] =  1 << ADC_BIT_EN                  # Power ADC on
     
     # Clear FIFO
-    while (mem32[adc+ADC_FCS] & (1 << FCS_BIT_FULL)) > 0:
+    #DEBUG = True
+    while (mem32[adc+ADC_FCS] & (1 << FCS_BIT_EMPTY)) == 0:
         x = mem16[adc+ADC_FIFO]
         if DEBUG:
             print(".")
@@ -688,23 +689,31 @@ def run_meter_avg(cycles=C_CYCLES):
         minv = 0
         maxv = 0
         err = 0
+        
         asn = time.ticks_us()    
-        for i in range(C_CYCLES):
+        for i in range(12):
             tm= adc_read_multi(ADC_BASE,ADC_RATE,ADC_SAMPLES)
             tm = wait_for_dma(ADC_BASE)
             #tm = lp_filter(adc_buffer,ADC_SAMPLES)
-            median += int(  sum(adc_buffer[20:ADC_SAMPLES]) / (ADC_SAMPLES-20) )
-            minv += min(adc_buffer[20:ADC_SAMPLES])
-            maxv += max(adc_buffer[20:ADC_SAMPLES])
+            median += sum(adc_buffer[20:ADC_SAMPLES]) / (ADC_SAMPLES-20)
+            adc_buffers = sorted(adc_buffer[0:ADC_SAMPLES])
+            avglen = int(len(adc_buffers) * .005)
+            #print("avglen:",avglen)
+            #print(*adc_buffers[0:avglen])
+            #print(*adc_buffers[len(adc_buffers)-avglen:])
+            minv += sum(adc_buffers[0:avglen]) / avglen
+            maxv += sum(adc_buffers[len(adc_buffers)-avglen:]) / avglen
+            #minv += min(adc_buffer[20:ADC_SAMPLES])
+            #maxv += max(adc_buffer[20:ADC_SAMPLES])
         
-        maxv = maxv >> C_SHIFT
-        minv = minv >> C_SHIFT
+        maxv = int(maxv / 12)
+        minv = int(minv / 12)
         if (maxv > 4065):
             err = 1
         elif  (minv < 20):
             err = 2
-        P2P = maxv - minv
-        median = median >> C_SHIFT
+        P2P = int(maxv - minv)
+        median = int(median / 12)
         #deviation = int(P2P * regs[4] + regs[5]) 
         #deviation = int((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] )
         deviation = int(((P2P * P2P) * regs[4] + P2P*regs[5] + regs[6] ) * regs[7])
