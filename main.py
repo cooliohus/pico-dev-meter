@@ -129,7 +129,7 @@ serial_buff = ""
 #    regs = [200_000, 5000, C_SHIFT, 2047, 0.00001200482, 1.630135, -102.449, C_SCALE, 5000/1550, VERSION]  # HP#
 
 if cpu_type == 'RP2350':
-    regs = [50_000, 1250, C_SHIFT, 2047, 0.000015722322, 1.609176, -74.5396, C_SCALE, 5000/1550, VERSION]    # ha2350c
+    regs = [50_000, 1250, C_SHIFT, 2047, 0.00001560279, 1.608199, -81.745, C_SCALE, 5000/1550, VERSION]    # ha2350c
 else:
     regs = [50_000, 1250, C_SHIFT, 2047, 0.00001200482, 1.630135, -102.449, C_SCALE, 5000/1550, VERSION]  # HP
 
@@ -697,7 +697,7 @@ def run_meter_avg(cycles=C_CYCLES):
             #tm = lp_filter(adc_buffer,ADC_SAMPLES)
             median += sum(adc_buffer[20:ADC_SAMPLES]) / (ADC_SAMPLES-20)
             adc_buffers = sorted(adc_buffer[0:ADC_SAMPLES])
-            avglen = int(len(adc_buffers) * .005)
+            avglen = int(len(adc_buffers) * .003)
             #print("avglen:",avglen)
             #print(*adc_buffers[0:avglen])
             #print(*adc_buffers[len(adc_buffers)-avglen:])
